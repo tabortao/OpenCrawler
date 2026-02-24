@@ -436,6 +436,8 @@ def save_article(title: str, url: str, markdown: str, html: str = "", image_urls
 
     if download_images:
         article_dir = os.path.dirname(filepath)
+        article_images_dir = os.path.join(article_dir, "images")
+        os.makedirs(article_images_dir, exist_ok=True)
         markdown = process_images_in_markdown(markdown, image_urls or [], article_dir)
 
     formatted_markdown = format_markdown_content(markdown)

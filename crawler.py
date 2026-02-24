@@ -190,7 +190,6 @@ class WebCrawler:
 
     def _clean_zhihu_content(self, markdown: str) -> str:
         lines = markdown.split('\n')
-        cleaned_lines = []
         skip_patterns = [
             r'^关注\s*$',
             r'^推荐\s*$',
@@ -208,19 +207,37 @@ class WebCrawler:
             r'^每天看网文\s*$',
             r'^​\s*$',
             r'^关注她\s*$',
+            r'^关注他\s*$',
             r'^\d+\s*人赞同了该文章\s*$',
             r'^\d+\s*人赞同了该回答\s*$',
+            r'^起点万订作者.*$',
+            r'^雾野漫游\s*$',
+            r'^RzJs\s*$',
         ]
 
-        for line in lines:
+        def is_nav_line(line: str) -> bool:
             stripped = line.strip()
-            should_skip = False
+            if not stripped:
+                return False
             for pattern in skip_patterns:
                 if re.match(pattern, stripped, re.IGNORECASE):
-                    should_skip = True
-                    break
-            if not should_skip:
-                cleaned_lines.append(line)
+                    return True
+            return False
+
+        cleaned_lines = []
+        prev_line = None
+        for line in lines:
+            stripped = line.strip()
+            
+            if is_nav_line(line):
+                continue
+            
+            if stripped and stripped == prev_line:
+                continue
+            
+            cleaned_lines.append(line)
+            if stripped:
+                prev_line = stripped
 
         result = '\n'.join(cleaned_lines)
         result = re.sub(r'\n{4,}', '\n\n\n', result)
@@ -342,6 +359,8 @@ class WebCrawler:
                     body_text = page.evaluate("() => document.body.innerText")
                     if body_text and len(body_text) > 100:
                         markdown = body_text
+                        if platform == "zhihu":
+                            markdown = self._clean_zhihu_content(markdown)
 
                 if not markdown or len(markdown) < 50:
                     raise ValueError("无法提取页面内容，可能需要登录或内容为空")
@@ -366,6 +385,73 @@ class WebCrawler:
         return await loop.run_in_executor(_executor, self._extract_content_sync, url)
 
 
+def html_to_markdown_with_images(html: str, image_urls: list[str], output_dir: str) -> str:
+    if not html:
+        return ""
+    
+    downloader = ImageDownloader(output_dir)
+    
+    try:
+        img_counter = [0]
+        
+        def replace_data_src_img(match):
+            full_tag = match.group(0)
+            data_src = match.group(1)
+            alt_match = re.search(r'alt=["\']([^"\']*)["\']', full_tag, re.IGNORECASE)
+            alt = alt_match.group(1) if alt_match else "图片"
+            
+            if not data_src or data_src.startswith("data:"):
+                return ""
+            
+            clean_src = data_src.replace("&amp;", "&")
+            local_path = downloader.download_image(clean_src)
+            
+            if local_path:
+                img_counter[0] += 1
+                return f'<p data-img-placeholder="true">IMG_PLACEHOLDER_{img_counter[0]}_{local_path}_{alt}</p>'
+            return ""
+        
+        data_src_pattern = r'<img[^>]*data-src=["\']([^"\']+)["\'][^>]*>'
+        html = re.sub(data_src_pattern, replace_data_src_img, html, flags=re.IGNORECASE)
+        
+        def replace_src_img(match):
+            full_tag = match.group(0)
+            src = match.group(1)
+            alt_match = re.search(r'alt=["\']([^"\']*)["\']', full_tag, re.IGNORECASE)
+            alt = alt_match.group(1) if alt_match else "图片"
+            
+            if not src or src.startswith("data:"):
+                return ""
+            
+            clean_src = src.replace("&amp;", "&")
+            local_path = downloader.download_image(clean_src)
+            
+            if local_path:
+                img_counter[0] += 1
+                return f'<p data-img-placeholder="true">IMG_PLACEHOLDER_{img_counter[0]}_{local_path}_{alt}</p>'
+            return ""
+        
+        src_pattern = r'<img[^>]*src=["\']([^"\']+)["\'][^>]*>'
+        html = re.sub(src_pattern, replace_src_img, html, flags=re.IGNORECASE)
+        
+        markdown = extract(html, include_links=True, include_images=True)
+        markdown = clean_markdown(markdown) if markdown else ""
+        
+        if markdown:
+            placeholder_pattern = r'IMG_PLACEHOLDER_(\d+)_([^_\s]+)_([^\n]+)'
+            def restore_img(match):
+                num = match.group(1)
+                path = match.group(2)
+                alt = match.group(3)
+                return f"![{alt}]({path})"
+            
+            markdown = re.sub(placeholder_pattern, restore_img, markdown)
+        
+        return markdown
+    finally:
+        downloader.close()
+
+
 def process_images_in_markdown(markdown: str, image_urls: list[str], output_dir: str) -> str:
     if not markdown and not image_urls:
         return markdown
@@ -373,6 +459,18 @@ def process_images_in_markdown(markdown: str, image_urls: list[str], output_dir:
     downloader = ImageDownloader(output_dir)
 
     try:
+        img_pattern = r'!\[([^\]]*)\]\(([^)]+)\)'
+        matches = re.findall(img_pattern, markdown)
+
+        for alt_text, img_url in matches:
+            if not img_url or img_url.startswith("data:"):
+                continue
+
+            clean_url = img_url.replace("&amp;", "&")
+            local_path = downloader.download_image(clean_url)
+            if local_path:
+                markdown = markdown.replace(f"![{alt_text}]({img_url})", f"![{alt_text}]({local_path})")
+
         for i, img_url in enumerate(image_urls):
             if not img_url or img_url.startswith("data:"):
                 continue
@@ -381,6 +479,9 @@ def process_images_in_markdown(markdown: str, image_urls: list[str], output_dir:
             img_url = img_url.replace("&lt;", "<")
             img_url = img_url.replace("&gt;", ">")
             img_url = img_url.replace("&quot;", '"')
+
+            if img_url in markdown:
+                continue
 
             local_path = downloader.download_image(img_url)
             if local_path:
@@ -434,7 +535,12 @@ def save_article(title: str, url: str, markdown: str, html: str = "", image_urls
         filepath = os.path.join(OUTPUT_DIR, filename)
         counter += 1
 
-    if download_images:
+    if download_images and html:
+        article_dir = os.path.dirname(filepath)
+        article_images_dir = os.path.join(article_dir, "images")
+        os.makedirs(article_images_dir, exist_ok=True)
+        markdown = html_to_markdown_with_images(html, image_urls or [], article_dir)
+    elif download_images:
         article_dir = os.path.dirname(filepath)
         article_images_dir = os.path.join(article_dir, "images")
         os.makedirs(article_images_dir, exist_ok=True)

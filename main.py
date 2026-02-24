@@ -65,7 +65,7 @@ async def extract_content(url: str = Query(..., description="要提取内容的�
     try:
         result = await asyncio.wait_for(
             extract_url(url),
-            timeout=60.0,
+            timeout=180.0,
         )
         return JSONResponse(content=result)
 
@@ -119,7 +119,7 @@ async def save_content(url: str = Query(..., description="要提取并保存的�
     try:
         result = await asyncio.wait_for(
             extract_url(url),
-            timeout=60.0,
+            timeout=180.0,
         )
 
         filepath = save_article(

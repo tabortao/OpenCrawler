@@ -1,12 +1,11 @@
 import asyncio
 import os
-import re
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import Any
 
 from dotenv import load_dotenv
-from playwright.sync_api import Browser, Page, sync_playwright
+from playwright.sync_api import sync_playwright
 from trafilatura import extract
 
 from utils import (
@@ -29,9 +28,6 @@ _executor = ThreadPoolExecutor(max_workers=4)
 
 
 class WebCrawler:
-    def __init__(self) -> None:
-        self.browser: Browser | None = None
-
     def _get_browser_args(self) -> dict[str, Any]:
         args: dict[str, Any] = {
             "headless": True,
@@ -40,6 +36,14 @@ class WebCrawler:
                 "--disable-infobars",
                 "--no-sandbox",
                 "--disable-dev-shm-usage",
+                "--disable-gpu",
+                "--disable-extensions",
+                "--disable-background-networking",
+                "--disable-sync",
+                "--disable-translate",
+                "--disable-default-apps",
+                "--mute-audio",
+                "--no-first-run",
             ],
         }
 
@@ -62,50 +66,40 @@ class WebCrawler:
 
         return cookies_to_inject
 
-    def _scroll_page(self, page: Page, times: int) -> None:
+    def _scroll_page(self, page, times: int) -> None:
         if times <= 0:
             return
 
         for _ in range(times):
-            page.evaluate("window.scrollBy(0, window.innerHeight)")
-            page.wait_for_timeout(500)
-
-        page.evaluate("window.scrollTo(0, 0)")
-
-    def _wait_for_selector(self, page: Page, selector: str, timeout: int) -> bool:
-        selectors = selector.split(", ")
-        for sel in selectors:
             try:
-                page.wait_for_selector(sel.strip(), timeout=timeout)
-                return True
+                page.evaluate("window.scrollBy(0, window.innerHeight)")
+                page.wait_for_timeout(400)
             except Exception:
-                continue
-        return False
+                break
 
-    def _clean_wechat_content(self, page: Page) -> None:
-        page.evaluate("""
-            const removeSelectors = [
-                '.rich_media_tool',
-                '.rich_media_area_extra',
-                '.qr_code_pc',
-                '#js_a_popular',
-                '#js_cmt_area',
-                '#js_sponsor',
-                '.a_dialog_close'
-            ];
-            removeSelectors.forEach(selector => {
-                document.querySelectorAll(selector).forEach(el => el.remove());
-            });
-        """)
-
-    def _handle_zhihu_popup(self, page: Page) -> None:
         try:
-            close_btn = page.query_selector('.Modal-closeButton, .css-1e3y2ua')
-            if close_btn:
-                close_btn.click()
-                page.wait_for_timeout(500)
+            page.evaluate("window.scrollTo(0, 0)")
         except Exception:
             pass
+
+    def _handle_zhihu_popup(self, page) -> None:
+        close_selectors = [
+            '.Modal-closeButton',
+            'button[aria-label="关闭"]',
+            '.CloseIcon',
+            'button.Button.Modal-closeButton',
+            '[class*="Modal"] button[aria-label*="关闭"]',
+            'button[class*="close"]',
+        ]
+        for sel in close_selectors:
+            try:
+                btn = page.query_selector(sel)
+                if btn and btn.is_visible():
+                    btn.click()
+                    page.wait_for_timeout(300)
+                    break
+            except Exception:
+                continue
 
     def _extract_content_sync(self, url: str) -> dict[str, Any]:
         platform = detect_platform(url)
@@ -118,6 +112,9 @@ class WebCrawler:
             context = browser.new_context(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
                 viewport={"width": 1920, "height": 1080},
+                locale="zh-CN",
+                timezone_id="Asia/Shanghai",
+                java_script_enabled=True,
             )
 
             cookies = self._get_cookies_for_platform(platform)
@@ -125,22 +122,21 @@ class WebCrawler:
                 context.add_cookies(cookies)
 
             page = context.new_page()
+            page.set_default_timeout(45000)
+            page.set_default_navigation_timeout(60000)
 
             try:
-                page.goto(url, wait_until="domcontentloaded", timeout=config["timeout"])
+                page.goto(url, wait_until="domcontentloaded", timeout=45000)
+
+                page.wait_for_load_state("domcontentloaded", timeout=20000)
 
                 if platform == "zhihu":
+                    page.wait_for_timeout(2000)
                     self._handle_zhihu_popup(page)
-
-                if config["selector"]:
-                    self._wait_for_selector(page, config["selector"], config["timeout"])
+                    page.wait_for_timeout(1000)
 
                 self._scroll_page(page, config["scroll_times"])
-
-                if platform == "wechat":
-                    self._clean_wechat_content(page)
-
-                page.wait_for_timeout(1500)
+                page.wait_for_timeout(800)
 
                 html_content = page.content()
                 title = extract_title_from_html(html_content)
@@ -149,6 +145,11 @@ class WebCrawler:
 
                 markdown = extract(main_content, include_links=True, include_images=True)
                 markdown = clean_markdown(markdown) if markdown else ""
+
+                if not markdown or len(markdown) < 50:
+                    body_text = page.evaluate("() => document.body.innerText")
+                    if body_text and len(body_text) > 100:
+                        markdown = body_text
 
                 if not markdown or len(markdown) < 50:
                     raise ValueError("无法提取页面内容，可能需要登录或内容为空")
@@ -161,20 +162,25 @@ class WebCrawler:
                 }
 
             finally:
-                browser.close()
+                try:
+                    browser.close()
+                except Exception:
+                    pass
 
-    def _extract_main_content(self, page: Page, platform: str) -> str:
+    def _extract_main_content(self, page, platform: str) -> str:
         selectors_map = {
             "zhihu": [
+                '.Post-RichTextContainer',
                 '.Post-RichText',
                 '.RichText',
                 '.RichContent-inner',
                 '.RichContent',
                 'article',
+                '.ztext',
                 '[itemprop="text"]',
-                '.RichText ztext Post-RichText',
+                '.RichText.ztext',
             ],
-            "github": ['.markdown-body', 'article'],
+            "github": ['.markdown-body', 'article', '.readme'],
             "xiaohongshu": ['.note-content', '#detail-desc', '.content'],
             "wechat": ['.rich_media_content', '#js_content'],
             "generic": ['article', '.content', '.post', 'main', '.article-body'],
@@ -192,7 +198,10 @@ class WebCrawler:
             except Exception:
                 continue
 
-        return page.content()
+        try:
+            return page.content()
+        except Exception:
+            return ""
 
     async def extract_content(self, url: str) -> dict[str, Any]:
         loop = asyncio.get_event_loop()

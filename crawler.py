@@ -2,13 +2,14 @@ import asyncio
 import hashlib
 import os
 import re
-from datetime import datetime, timedelta
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 from typing import Any
 from urllib.parse import urljoin, urlparse
 
 import httpx
-from crawlee.crawlers import PlaywrightCrawler, PlaywrightCrawlingContext
 from dotenv import load_dotenv
+from playwright.sync_api import sync_playwright
 from trafilatura import extract
 
 from utils import (
@@ -27,6 +28,8 @@ ZHIHU_COOKIE = os.getenv("ZHIHU_COOKIE", "")
 XHS_COOKIE = os.getenv("XHS_COOKIE", "")
 OUTPUT_DIR = os.getenv("OUTPUT_DIR", "output")
 
+_executor = ThreadPoolExecutor(max_workers=4)
+
 
 class ImageDownloader:
     def __init__(self, output_dir: str):
@@ -36,8 +39,9 @@ class ImageDownloader:
             timeout=30,
             follow_redirects=True,
             headers={
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+                "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+                "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
             },
         )
         self.downloaded: dict[str, str] = {}
@@ -66,7 +70,15 @@ class ImageDownloader:
             return self.downloaded[url]
 
         try:
-            response = self.client.get(url)
+            clean_url = url.replace("&amp;", "&")
+            clean_url = clean_url.replace("&lt;", "<")
+            clean_url = clean_url.replace("&gt;", ">")
+            clean_url = clean_url.replace("&quot;", '"')
+            
+            if clean_url.startswith("//"):
+                clean_url = "https:" + clean_url
+
+            response = self.client.get(clean_url)
             if response.status_code != 200:
                 return None
 
@@ -74,7 +86,8 @@ class ImageDownloader:
             ext = self._get_image_extension(url, content_type)
 
             url_hash = hashlib.md5(url.encode()).hexdigest()[:12]
-            filename = f"{url_hash}{ext}"
+            safe_hash = ''.join(c for c in url_hash if c.isalnum())
+            filename = f"{safe_hash}{ext}"
             filepath = os.path.join(self.images_dir, filename)
 
             with open(filepath, "wb") as f:
@@ -84,7 +97,8 @@ class ImageDownloader:
             self.downloaded[url] = relative_path
             return relative_path
 
-        except Exception:
+        except Exception as e:
+            print(f"Failed to download image: {url[:50]}... Error: {e}")
             return None
 
     def close(self):
@@ -92,10 +106,29 @@ class ImageDownloader:
 
 
 class WebCrawler:
-    def __init__(self):
-        self.result: dict[str, Any] = {}
-        self.error: str | None = None
-        self.platform = "generic"
+    def _get_browser_args(self) -> dict[str, Any]:
+        args: dict[str, Any] = {
+            "headless": True,
+            "args": [
+                "--disable-blink-features=AutomationControlled",
+                "--disable-infobars",
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-gpu",
+                "--disable-extensions",
+                "--disable-background-networking",
+                "--disable-sync",
+                "--disable-translate",
+                "--disable-default-apps",
+                "--mute-audio",
+                "--no-first-run",
+            ],
+        }
+
+        if PROXY_URL:
+            args["proxy"] = {"server": PROXY_URL}
+
+        return args
 
     def _get_cookies_for_platform(self, platform: str) -> list[dict[str, Any]]:
         cookies_to_inject: list[dict[str, Any]] = []
@@ -111,23 +144,23 @@ class WebCrawler:
 
         return cookies_to_inject
 
-    async def _scroll_page(self, page, times: int) -> None:
+    def _scroll_page(self, page, times: int) -> None:
         if times <= 0:
             return
 
         for _ in range(times):
             try:
-                await page.evaluate("window.scrollBy(0, window.innerHeight)")
-                await asyncio.sleep(0.4)
+                page.evaluate("window.scrollBy(0, window.innerHeight)")
+                page.wait_for_timeout(400)
             except Exception:
                 break
 
         try:
-            await page.evaluate("window.scrollTo(0, 0)")
+            page.evaluate("window.scrollTo(0, 0)")
         except Exception:
             pass
 
-    async def _handle_zhihu_popup(self, page) -> None:
+    def _handle_zhihu_popup(self, page) -> None:
         close_selectors = [
             '.Modal-closeButton',
             'button[aria-label="关闭"]',
@@ -135,17 +168,65 @@ class WebCrawler:
         ]
         for sel in close_selectors:
             try:
-                btn = await page.query_selector(sel)
-                if btn:
-                    is_visible = await btn.is_visible()
-                    if is_visible:
-                        await btn.click()
-                        await asyncio.sleep(0.3)
-                        break
+                btn = page.query_selector(sel)
+                if btn and btn.is_visible():
+                    btn.click()
+                    page.wait_for_timeout(300)
+                    break
             except Exception:
                 continue
 
-    async def _extract_main_content(self, page, platform: str) -> str:
+    def _clean_zhihu_title(self, title: str) -> str:
+        patterns = [
+            r'\s*[\(（]\s*\d+\s*封私信.*?[\)）]',
+            r'\s*[\(（]\s*\d+\s*条消息.*?[\)）]',
+            r'\s*-\s*\d+\s*封私信.*',
+            r'\s*\d+\s*封私信',
+            r'\s*\d+\s*条消息',
+        ]
+        for pattern in patterns:
+            title = re.sub(pattern, '', title, flags=re.IGNORECASE)
+        return title.strip()
+
+    def _clean_zhihu_content(self, markdown: str) -> str:
+        lines = markdown.split('\n')
+        cleaned_lines = []
+        skip_patterns = [
+            r'^关注\s*$',
+            r'^推荐\s*$',
+            r'^热榜\s*$',
+            r'^专栏\s*$',
+            r'^圈子\s*$',
+            r'^New\s*$',
+            r'^付费咨询\s*$',
+            r'^知学堂\s*$',
+            r'^直答\s*$',
+            r'^消息\s*$',
+            r'^私信\s*$',
+            r'^创作中心\s*$',
+            r'^\d+\s*$',
+            r'^每天看网文\s*$',
+            r'^​\s*$',
+            r'^关注她\s*$',
+            r'^\d+\s*人赞同了该文章\s*$',
+            r'^\d+\s*人赞同了该回答\s*$',
+        ]
+
+        for line in lines:
+            stripped = line.strip()
+            should_skip = False
+            for pattern in skip_patterns:
+                if re.match(pattern, stripped, re.IGNORECASE):
+                    should_skip = True
+                    break
+            if not should_skip:
+                cleaned_lines.append(line)
+
+        result = '\n'.join(cleaned_lines)
+        result = re.sub(r'\n{4,}', '\n\n\n', result)
+        return result.strip()
+
+    def _extract_main_content(self, page, platform: str) -> tuple[str, list[str]]:
         selectors_map = {
             "zhihu": [
                 '.Post-RichTextContainer',
@@ -162,28 +243,36 @@ class WebCrawler:
         }
 
         selectors = selectors_map.get(platform, selectors_map["generic"])
+        image_urls = []
 
         for selector in selectors:
             try:
-                el = await page.query_selector(selector)
+                el = page.query_selector(selector)
                 if el:
-                    text = await el.inner_text()
+                    text = el.inner_text()
                     if len(text) > 100:
-                        html = await el.inner_html()
                         if platform == "wechat":
-                            html = await self._process_wechat_images(el)
-                        return html
+                            html = self._process_wechat_images(el)
+                        else:
+                            html = el.inner_html()
+
+                        img_pattern = r'<img[^>]+(?:data-)?src=["\']([^"\']+)["\'][^>]*>'
+                        image_urls = re.findall(img_pattern, html, re.IGNORECASE)
+                        return html, image_urls
             except Exception:
                 continue
 
         try:
-            return await page.content()
+            html = page.content()
+            img_pattern = r'<img[^>]+(?:data-)?src=["\']([^"\']+)["\'][^>]*>'
+            image_urls = re.findall(img_pattern, html, re.IGNORECASE)
+            return html, image_urls
         except Exception:
-            return ""
+            return "", []
 
-    async def _process_wechat_images(self, element) -> str:
+    def _process_wechat_images(self, element) -> str:
         try:
-            await element.evaluate("""
+            element.evaluate("""
                 (el) => {
                     const images = el.querySelectorAll('img');
                     images.forEach(img => {
@@ -194,131 +283,108 @@ class WebCrawler:
                     });
                 }
             """)
-            return await element.inner_html()
+            return element.inner_html()
         except Exception:
-            return await element.inner_html()
+            return element.inner_html()
 
-    def _inject_wechat_images(self, markdown: str, html: str) -> str:
-        img_pattern = r'<img[^>]+data-src=["\']([^"\']+)["\'][^>]*>'
-        matches = re.findall(img_pattern, html, re.IGNORECASE)
+    def _extract_content_sync(self, url: str) -> dict[str, Any]:
+        platform = detect_platform(url)
+        config = get_platform_config(platform)
 
-        if not matches:
-            img_pattern = r'<img[^>]+src=["\']([^"\']+)["\'][^>]*>'
-            matches = re.findall(img_pattern, html, re.IGNORECASE)
+        with sync_playwright() as p:
+            browser_args = self._get_browser_args()
+            browser = p.chromium.launch(**browser_args)
 
-        image_markdown = ""
-        for i, img_url in enumerate(matches[:20]):
-            if img_url.startswith("//"):
-                img_url = "https:" + img_url
-            if "mmbiz.qpic.cn" in img_url or "wx" in img_url:
-                clean_url = img_url.split("&amp;")[0].split("#")[0]
-                image_markdown += f"\n\n![图片{i+1}]({clean_url})\n"
+            context = browser.new_context(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+                viewport={"width": 1920, "height": 1080},
+                locale="zh-CN",
+                timezone_id="Asia/Shanghai",
+                java_script_enabled=True,
+            )
 
-        if image_markdown and markdown:
-            return markdown + "\n\n---\n\n## 图片内容\n" + image_markdown
-        return markdown
-
-    async def crawl(self, url: str) -> dict[str, Any]:
-        self.platform = detect_platform(url)
-        self.result = {}
-        self.error = None
-        config = get_platform_config(self.platform)
-
-        crawler = PlaywrightCrawler(
-            max_requests_per_crawl=1,
-            headless=True,
-            browser_type="chromium",
-            request_handler_timeout=timedelta(seconds=120),
-        )
-
-        crawler_instance = self
-
-        @crawler.router.default_handler
-        async def request_handler(context: PlaywrightCrawlingContext) -> None:
-            page = context.page
-
-            cookies = crawler_instance._get_cookies_for_platform(crawler_instance.platform)
+            cookies = self._get_cookies_for_platform(platform)
             if cookies:
-                await page.context.add_cookies(cookies)
+                context.add_cookies(cookies)
+
+            page = context.new_page()
+            page.set_default_timeout(45000)
+            page.set_default_navigation_timeout(60000)
 
             try:
-                await page.wait_for_load_state("domcontentloaded", timeout=25000)
+                page.goto(url, wait_until="domcontentloaded", timeout=45000)
 
-                if crawler_instance.platform == "zhihu":
-                    await asyncio.sleep(1.5)
-                    await crawler_instance._handle_zhihu_popup(page)
-                    await asyncio.sleep(0.5)
+                page.wait_for_load_state("domcontentloaded", timeout=20000)
 
-                await crawler_instance._scroll_page(page, config["scroll_times"])
-                await asyncio.sleep(0.5)
+                if platform == "zhihu":
+                    page.wait_for_timeout(1500)
+                    self._handle_zhihu_popup(page)
+                    page.wait_for_timeout(500)
 
-                html_content = await page.content()
+                self._scroll_page(page, config["scroll_times"])
+                page.wait_for_timeout(500)
+
+                html_content = page.content()
                 title = extract_title_from_html(html_content)
 
-                main_content = await crawler_instance._extract_main_content(page, crawler_instance.platform)
+                if platform == "zhihu":
+                    title = self._clean_zhihu_title(title)
+
+                main_content, image_urls = self._extract_main_content(page, platform)
 
                 markdown = extract(main_content, include_links=True, include_images=True)
                 markdown = clean_markdown(markdown) if markdown else ""
 
-                if crawler_instance.platform == "wechat":
-                    markdown = crawler_instance._inject_wechat_images(markdown, main_content)
+                if platform == "zhihu":
+                    markdown = self._clean_zhihu_content(markdown)
 
                 if not markdown or len(markdown) < 50:
-                    body_text = await page.evaluate("() => document.body.innerText")
+                    body_text = page.evaluate("() => document.body.innerText")
                     if body_text and len(body_text) > 100:
                         markdown = body_text
 
                 if not markdown or len(markdown) < 50:
-                    crawler_instance.error = "无法提取页面内容，可能需要登录或内容为空"
-                    return
+                    raise ValueError("无法提取页面内容，可能需要登录或内容为空")
 
-                crawler_instance.result = {
+                return {
                     "status": "success",
                     "title": title,
-                    "url": str(context.request.url),
+                    "url": url,
                     "markdown": markdown,
                     "html": main_content,
+                    "image_urls": image_urls,
                 }
 
-            except Exception as e:
-                crawler_instance.error = str(e)
+            finally:
+                try:
+                    browser.close()
+                except Exception:
+                    pass
 
-        try:
-            await crawler.run([url])
-        except Exception as e:
-            self.error = str(e)
-
-        if self.error:
-            raise ValueError(self.error)
-
-        if not self.result:
-            raise ValueError("抓取失败，未能获取页面内容")
-
-        return self.result
+    async def crawl(self, url: str) -> dict[str, Any]:
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(_executor, self._extract_content_sync, url)
 
 
-def process_images_in_markdown(markdown: str, html: str, base_url: str, output_dir: str) -> str:
-    if not markdown:
+def process_images_in_markdown(markdown: str, image_urls: list[str], output_dir: str) -> str:
+    if not markdown and not image_urls:
         return markdown
 
     downloader = ImageDownloader(output_dir)
 
     try:
-        img_pattern = r'!\[([^\]]*)\]\(([^)]+)\)'
-        matches = re.findall(img_pattern, markdown)
-
-        for alt_text, img_url in matches:
+        for i, img_url in enumerate(image_urls):
             if not img_url or img_url.startswith("data:"):
                 continue
 
-            if img_url.startswith("//"):
-                img_url = "https:" + img_url
-            elif not img_url.startswith("http"):
-                img_url = urljoin(base_url, img_url)
+            img_url = img_url.replace("&amp;", "&")
+            img_url = img_url.replace("&lt;", "<")
+            img_url = img_url.replace("&gt;", ">")
+            img_url = img_url.replace("&quot;", '"')
 
             local_path = downloader.download_image(img_url)
             if local_path:
-                markdown = markdown.replace(f"![{alt_text}]({img_url})", f"![{alt_text}]({local_path})")
+                markdown += f"\n\n![图片{i+1}]({local_path})"
 
         return markdown
 
@@ -354,7 +420,7 @@ def format_markdown_content(markdown: str) -> str:
     return result.strip()
 
 
-def save_article(title: str, url: str, markdown: str, html: str = "") -> str:
+def save_article(title: str, url: str, markdown: str, html: str = "", image_urls: list[str] = None, download_images: bool = False) -> str:
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
     today = datetime.now().strftime("%Y-%m-%d")
@@ -368,8 +434,9 @@ def save_article(title: str, url: str, markdown: str, html: str = "") -> str:
         filepath = os.path.join(OUTPUT_DIR, filename)
         counter += 1
 
-    article_dir = os.path.dirname(filepath)
-    markdown = process_images_in_markdown(markdown, html, url, article_dir)
+    if download_images:
+        article_dir = os.path.dirname(filepath)
+        markdown = process_images_in_markdown(markdown, image_urls or [], article_dir)
 
     formatted_markdown = format_markdown_content(markdown)
 

@@ -3,10 +3,10 @@
   "forefront_sequence_counter": 0,
   "forefront_requests": {},
   "regular_requests": {
-    "https://github.com/fastapi/fastapi": 0
+    "https://mp.weixin.qq.com/s/alefwypiryftjer8edjewg": 0
   },
   "in_progress_requests": [],
   "handled_requests": [
-    "https://github.com/fastapi/fastapi"
+    "https://mp.weixin.qq.com/s/alefwypiryftjer8edjewg"
   ]
 }

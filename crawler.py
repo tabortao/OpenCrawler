@@ -144,6 +144,32 @@ class WebCrawler:
 
         return cookies_to_inject
 
+    def _check_login_status(self, page, platform: str) -> bool:
+        if platform == "xiaohongshu":
+            login_indicators = [
+                '.login-container',
+                '.login-btn',
+                'text=登录后推荐更懂你的笔记',
+                'text=手机号登录',
+            ]
+            for selector in login_indicators:
+                try:
+                    el = page.query_selector(selector)
+                    if el and el.is_visible():
+                        return False
+                except Exception:
+                    continue
+            return True
+        elif platform == "zhihu":
+            try:
+                login_text = page.query_selector('text=登录')
+                if login_text and login_text.is_visible():
+                    return False
+            except Exception:
+                pass
+            return True
+        return True
+
     def _scroll_page(self, page, times: int) -> None:
         if times <= 0:
             return
@@ -318,22 +344,59 @@ class WebCrawler:
                 locale="zh-CN",
                 timezone_id="Asia/Shanghai",
                 java_script_enabled=True,
+                color_scheme="light",
+                has_touch=False,
+                is_mobile=False,
+                ignore_https_errors=True,
             )
 
-            cookies = self._get_cookies_for_platform(platform)
-            if cookies:
-                context.add_cookies(cookies)
+            xhs_cookies = self._get_cookies_for_platform("xiaohongshu")
+            if xhs_cookies:
+                context.add_cookies(xhs_cookies)
+
+            zhihu_cookies = self._get_cookies_for_platform("zhihu")
+            if zhihu_cookies:
+                context.add_cookies(zhihu_cookies)
 
             page = context.new_page()
             page.set_default_timeout(45000)
             page.set_default_navigation_timeout(60000)
 
+            page.add_init_script("""
+                Object.defineProperty(navigator, 'webdriver', {
+                    get: () => undefined
+                });
+                Object.defineProperty(navigator, 'plugins', {
+                    get: () => [1, 2, 3, 4, 5]
+                });
+                Object.defineProperty(navigator, 'languages', {
+                    get: () => ['zh-CN', 'zh', 'en']
+                });
+                window.chrome = {
+                    runtime: {}
+                };
+            """)
+
             try:
+                if "xhslink.com" in url.lower():
+                    page.goto("https://www.xiaohongshu.com", wait_until="domcontentloaded", timeout=30000)
+                    page.wait_for_timeout(3000)
+
                 page.goto(url, wait_until="domcontentloaded", timeout=45000)
+
+                final_url = page.url
+                final_platform = detect_platform(final_url)
+                
+                if final_platform == "xiaohongshu":
+                    page.wait_for_timeout(2000)
+                    if not self._check_login_status(page, "xiaohongshu"):
+                        print("Warning: 小红书未检测到登录状态，Cookie可能已过期")
+                        page.reload(wait_until="networkidle", timeout=30000)
+                        page.wait_for_timeout(2000)
 
                 page.wait_for_load_state("domcontentloaded", timeout=20000)
 
-                if platform == "zhihu":
+                if platform == "zhihu" or final_platform == "zhihu":
                     page.wait_for_timeout(1500)
                     self._handle_zhihu_popup(page)
                     page.wait_for_timeout(500)
@@ -381,6 +444,23 @@ class WebCrawler:
                     pass
 
     async def crawl(self, url: str) -> dict[str, Any]:
+        platform = detect_platform(url)
+        
+        if platform == "xiaohongshu":
+            from xhs_crawler import crawl_xiaohongshu
+            try:
+                result = await crawl_xiaohongshu(url, headless=True)
+                return {
+                    "status": "success",
+                    "title": result["title"],
+                    "url": result["url"],
+                    "markdown": result["markdown"],
+                    "html": "",
+                    "image_urls": [],
+                }
+            except Exception as e:
+                print(f"[WebCrawler] 小红书爬取失败，尝试通用方法: {e}")
+        
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(_executor, self._extract_content_sync, url)
 

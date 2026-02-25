@@ -178,9 +178,11 @@ class XiaoHongShuCrawler:
         if not s:
             return s
         try:
-            import codecs
-            decoded = codecs.decode(s, 'unicode_escape')
-            return decoded
+            if '\\u' in s:
+                import codecs
+                decoded = codecs.decode(s, 'unicode_escape')
+                return decoded
+            return s
         except Exception:
             return s
 
@@ -191,6 +193,31 @@ class XiaoHongShuCrawler:
             return s.replace('\\n', '\n').replace('\\t', '\t').replace('\\"', '"')
         except Exception:
             return s
+
+    def _extract_desc_from_html(self, html: str) -> str:
+        if not html:
+            return ""
+        
+        desc = ""
+        
+        desc_matches = re.findall(r'"desc"\s*:\s*"((?:[^"\\]|\\.)*)"', html, re.DOTALL)
+        
+        if desc_matches:
+            for match in desc_matches:
+                decoded = self._decode_json_string(match)
+                try:
+                    decoded = self._decode_unicode(decoded)
+                except Exception:
+                    pass
+                if len(decoded) > len(desc):
+                    desc = decoded
+        
+        if not desc:
+            meta_match = re.search(r'<meta\s+name="description"\s+content="([^"]*)"', html)
+            if meta_match:
+                desc = meta_match.group(1)
+        
+        return desc.strip()
 
     async def get_note_by_url(self, url: str) -> dict[str, Any]:
         note_id, xsec_token, xsec_source = self._parse_note_url(url)
@@ -343,9 +370,7 @@ class XiaoHongShuCrawler:
                             if title_match:
                                 title = title_match.group(1).replace(" - 小红书", "").strip()
                             
-                            desc_match = re.search(r'"desc"\s*:\s*"([^"]*)"', html)
-                            desc = desc_match.group(1) if desc_match else ""
-                            desc = self._decode_json_string(desc)
+                            desc = self._extract_desc_from_html(html)
                             
                             if title or desc or image_urls:
                                 return {
@@ -363,8 +388,7 @@ class XiaoHongShuCrawler:
             if title_match:
                 title = title_match.group(1).replace(" - 小红书", "").strip()
                 
-                desc_match = re.search(r'<meta name="description" content="([^"]*)"', html)
-                desc = desc_match.group(1) if desc_match else ""
+                desc = self._extract_desc_from_html(html)
                 
                 image_urls = re.findall(r'data-src="([^"]+)"', html)
                 image_urls += re.findall(r'src="https://[^"]*xhscdn[^"]*"', html)
@@ -526,13 +550,9 @@ class XiaoHongShuCrawler:
 def convert_note_to_markdown(note: dict, url: str) -> str:
     title = note.get("title", "小红书笔记")
     desc = note.get("desc", "")
-    user = note.get("user", {})
-    nickname = user.get("nickname", "未知用户")
     image_list = note.get("image_list", [])
-    interact_info = note.get("interact_info", {})
     
     lines = [
-        f"> 作者: {nickname}",
         f"> 来源: [{url}]({url})",
         "",
         "---",
@@ -551,16 +571,6 @@ def convert_note_to_markdown(note: dict, url: str) -> str:
             if img_url:
                 lines.append(f"![图片{i+1}]({img_url})")
                 lines.append("")
-    
-    lines.extend([
-        "---",
-        "",
-        "## 互动数据",
-        "",
-        f"- 点赞: {interact_info.get('liked_count', 0)}",
-        f"- 收藏: {interact_info.get('collected_count', 0)}",
-        f"- 评论: {interact_info.get('comment_count', 0)}",
-    ])
     
     return "\n".join(lines)
 

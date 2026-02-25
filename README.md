@@ -168,6 +168,22 @@ MyCrawler/
 - Swagger UI: http://127.0.0.1:8000/docs
 - ReDoc: http://127.0.0.1:8000/redoc
 
+## 注意事项
+
+### uvicorn reload 模式问题
+
+**重要**: `main.py` 中的 `reload=False` 不能改为 `True`！
+
+当使用 `uvicorn.run("main:app", reload=True)` 启动时，uvicorn 会创建一个 reloader 进程来监控文件变化，这会导致：
+
+1. **模块被多次加载** - 可以看到日志中模块加载信息出现两次
+2. **异步任务执行异常** - 爬取请求没有被正确处理，服务端日志完全没有显示爬取过程
+3. **结果为空** - 生成的 Markdown 文件只有标题，没有内容和图片
+
+**解决方案**: 生产环境必须使用 `reload=False`。如果需要开发调试：
+- 使用测试脚本 `test_xhs_direct.py` 直接测试爬虫功能
+- 或者单独启动服务进行测试，但不要依赖 reload 功能
+
 ## 许可证
 
 MIT License

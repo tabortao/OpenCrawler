@@ -9,7 +9,11 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from crawler import extract_url, save_article
-from utils import is_valid_url
+from utils import detect_platform, is_valid_url
+
+print(f"[Main] Loaded crawler module, checking extract_url...")
+import crawler
+print(f"[Main] crawler.crawl method exists: {hasattr(crawler, 'WebCrawler')}")
 
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
@@ -125,6 +129,7 @@ async def save_content(
             timeout=300.0,
         )
 
+        platform = detect_platform(url)
         filepath = save_article(
             title=result["title"],
             url=result["url"],
@@ -132,6 +137,7 @@ async def save_content(
             html=result.get("html", ""),
             image_urls=result.get("image_urls", []),
             download_images=download_images,
+            platform=platform,
         )
 
         return JSONResponse(content={
@@ -190,5 +196,5 @@ if __name__ == "__main__":
         "main:app",
         host=HOST,
         port=PORT,
-        reload=True,
+        reload=False,
     )

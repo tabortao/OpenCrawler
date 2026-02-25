@@ -10,8 +10,8 @@ from urllib.parse import urljoin, urlparse
 import httpx
 from dotenv import load_dotenv
 from playwright.sync_api import sync_playwright
-from trafilatura import extract
 
+from markdown_converter import convert_html_to_markdown, extract_images_from_html
 from utils import (
     clean_markdown,
     detect_platform,
@@ -286,7 +286,6 @@ class WebCrawler:
         }
 
         selectors = selectors_map.get(platform, selectors_map["generic"])
-        image_urls = []
 
         for selector in selectors:
             try:
@@ -294,41 +293,18 @@ class WebCrawler:
                 if el:
                     text = el.inner_text()
                     if len(text) > 100:
-                        if platform == "wechat":
-                            html = self._process_wechat_images(el)
-                        else:
-                            html = el.inner_html()
-
-                        img_pattern = r'<img[^>]+(?:data-)?src=["\']([^"\']+)["\'][^>]*>'
-                        image_urls = re.findall(img_pattern, html, re.IGNORECASE)
+                        html = el.inner_html()
+                        image_urls = extract_images_from_html(html)
                         return html, image_urls
             except Exception:
                 continue
 
         try:
             html = page.content()
-            img_pattern = r'<img[^>]+(?:data-)?src=["\']([^"\']+)["\'][^>]*>'
-            image_urls = re.findall(img_pattern, html, re.IGNORECASE)
+            image_urls = extract_images_from_html(html)
             return html, image_urls
         except Exception:
             return "", []
-
-    def _process_wechat_images(self, element) -> str:
-        try:
-            element.evaluate("""
-                (el) => {
-                    const images = el.querySelectorAll('img');
-                    images.forEach(img => {
-                        const dataSrc = img.getAttribute('data-src');
-                        if (dataSrc && !img.getAttribute('src')) {
-                            img.setAttribute('src', dataSrc);
-                        }
-                    });
-                }
-            """)
-            return element.inner_html()
-        except Exception:
-            return element.inner_html()
 
     def _extract_content_sync(self, url: str) -> dict[str, Any]:
         platform = detect_platform(url)
@@ -412,8 +388,7 @@ class WebCrawler:
 
                 main_content, image_urls = self._extract_main_content(page, platform)
 
-                markdown = extract(main_content, include_links=True, include_images=True)
-                markdown = clean_markdown(markdown) if markdown else ""
+                markdown = convert_html_to_markdown(main_content, platform=platform)
 
                 if platform == "zhihu":
                     markdown = self._clean_zhihu_content(markdown)
@@ -445,8 +420,10 @@ class WebCrawler:
 
     async def crawl(self, url: str) -> dict[str, Any]:
         platform = detect_platform(url)
+        print(f"[WebCrawler] Detected platform: {platform} for URL: {url}")
         
         if platform == "xiaohongshu":
+            print("[WebCrawler] Using XiaoHongShu crawler...")
             from xhs_crawler import crawl_xiaohongshu
             try:
                 result = await crawl_xiaohongshu(url, headless=True)
@@ -457,6 +434,7 @@ class WebCrawler:
                     if img_url:
                         image_urls.append(img_url)
                 
+                print(f"[WebCrawler] XiaoHongShu crawler success: title={result['title']}, images={len(image_urls)}")
                 return {
                     "status": "success",
                     "title": result["title"],
@@ -467,73 +445,26 @@ class WebCrawler:
                     "note": note,
                 }
             except Exception as e:
+                import traceback
                 print(f"[WebCrawler] 小红书爬取失败，尝试通用方法: {e}")
+                traceback.print_exc()
         
+        print("[WebCrawler] Using generic crawler...")
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(_executor, self._extract_content_sync, url)
 
 
-def html_to_markdown_with_images(html: str, image_urls: list[str], output_dir: str) -> str:
+def html_to_markdown_with_images(html: str, image_urls: list[str], output_dir: str, platform: str = "generic") -> str:
     if not html:
         return ""
     
     downloader = ImageDownloader(output_dir)
     
     try:
-        img_counter = [0]
+        from markdown_converter import process_images_in_markdown as process_imgs
         
-        def replace_data_src_img(match):
-            full_tag = match.group(0)
-            data_src = match.group(1)
-            alt_match = re.search(r'alt=["\']([^"\']*)["\']', full_tag, re.IGNORECASE)
-            alt = alt_match.group(1) if alt_match else "图片"
-            
-            if not data_src or data_src.startswith("data:"):
-                return ""
-            
-            clean_src = data_src.replace("&amp;", "&")
-            local_path = downloader.download_image(clean_src)
-            
-            if local_path:
-                img_counter[0] += 1
-                return f'<p data-img-placeholder="true">IMG_PLACEHOLDER_{img_counter[0]}_{local_path}_{alt}</p>'
-            return ""
-        
-        data_src_pattern = r'<img[^>]*data-src=["\']([^"\']+)["\'][^>]*>'
-        html = re.sub(data_src_pattern, replace_data_src_img, html, flags=re.IGNORECASE)
-        
-        def replace_src_img(match):
-            full_tag = match.group(0)
-            src = match.group(1)
-            alt_match = re.search(r'alt=["\']([^"\']*)["\']', full_tag, re.IGNORECASE)
-            alt = alt_match.group(1) if alt_match else "图片"
-            
-            if not src or src.startswith("data:"):
-                return ""
-            
-            clean_src = src.replace("&amp;", "&")
-            local_path = downloader.download_image(clean_src)
-            
-            if local_path:
-                img_counter[0] += 1
-                return f'<p data-img-placeholder="true">IMG_PLACEHOLDER_{img_counter[0]}_{local_path}_{alt}</p>'
-            return ""
-        
-        src_pattern = r'<img[^>]*src=["\']([^"\']+)["\'][^>]*>'
-        html = re.sub(src_pattern, replace_src_img, html, flags=re.IGNORECASE)
-        
-        markdown = extract(html, include_links=True, include_images=True)
-        markdown = clean_markdown(markdown) if markdown else ""
-        
-        if markdown:
-            placeholder_pattern = r'IMG_PLACEHOLDER_(\d+)_([^_\s]+)_([^\n]+)'
-            def restore_img(match):
-                num = match.group(1)
-                path = match.group(2)
-                alt = match.group(3)
-                return f"![{alt}]({path})"
-            
-            markdown = re.sub(placeholder_pattern, restore_img, markdown)
+        markdown = convert_html_to_markdown(html, platform=platform)
+        markdown = process_imgs(markdown, image_urls, downloader)
         
         return markdown
     finally:
@@ -640,7 +571,9 @@ def format_markdown_content(markdown: str) -> str:
     return result.strip()
 
 
-def save_article(title: str, url: str, markdown: str, html: str = "", image_urls: list[str] = None, download_images: bool = False) -> str:
+def save_article(title: str, url: str, markdown: str, html: str = "", image_urls: list[str] = None, download_images: bool = False, platform: str = "generic") -> str:
+    print(f"[save_article] title={title}, markdown_len={len(markdown)}, image_urls={len(image_urls) if image_urls else 0}, download_images={download_images}, platform={platform}")
+    
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
     today = datetime.now().strftime("%Y-%m-%d")
@@ -660,7 +593,7 @@ def save_article(title: str, url: str, markdown: str, html: str = "", image_urls
         os.makedirs(article_images_dir, exist_ok=True)
         
         if html:
-            markdown = html_to_markdown_with_images(html, image_urls or [], article_dir)
+            markdown = html_to_markdown_with_images(html, image_urls or [], article_dir, platform=platform)
         elif image_urls:
             markdown = download_images_in_markdown(markdown, image_urls, article_dir)
 

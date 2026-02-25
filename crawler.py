@@ -450,13 +450,21 @@ class WebCrawler:
             from xhs_crawler import crawl_xiaohongshu
             try:
                 result = await crawl_xiaohongshu(url, headless=True)
+                note = result.get("note", {})
+                image_urls = []
+                for img in note.get("image_list", []):
+                    img_url = img.get("url_default") or img.get("url", "")
+                    if img_url:
+                        image_urls.append(img_url)
+                
                 return {
                     "status": "success",
                     "title": result["title"],
                     "url": result["url"],
                     "markdown": result["markdown"],
                     "html": "",
-                    "image_urls": [],
+                    "image_urls": image_urls,
+                    "note": note,
                 }
             except Exception as e:
                 print(f"[WebCrawler] 小红书爬取失败，尝试通用方法: {e}")
@@ -573,6 +581,37 @@ def process_images_in_markdown(markdown: str, image_urls: list[str], output_dir:
         downloader.close()
 
 
+def download_images_in_markdown(markdown: str, image_urls: list[str], output_dir: str) -> str:
+    if not markdown:
+        return markdown
+
+    downloader = ImageDownloader(output_dir)
+
+    try:
+        img_pattern = r'!\[([^\]]*)\]\(([^)]+)\)'
+        
+        def replace_image_url(match):
+            alt_text = match.group(1)
+            img_url = match.group(2)
+            
+            if not img_url or img_url.startswith("data:") or img_url.startswith("images/"):
+                return match.group(0)
+            
+            clean_url = img_url.replace("&amp;", "&")
+            local_path = downloader.download_image(clean_url)
+            
+            if local_path:
+                return f"![{alt_text}]({local_path})"
+            return match.group(0)
+        
+        markdown = re.sub(img_pattern, replace_image_url, markdown)
+        
+        return markdown
+
+    finally:
+        downloader.close()
+
+
 def format_markdown_content(markdown: str) -> str:
     if not markdown:
         return ""
@@ -615,16 +654,15 @@ def save_article(title: str, url: str, markdown: str, html: str = "", image_urls
         filepath = os.path.join(OUTPUT_DIR, filename)
         counter += 1
 
-    if download_images and html:
+    if download_images:
         article_dir = os.path.dirname(filepath)
         article_images_dir = os.path.join(article_dir, "images")
         os.makedirs(article_images_dir, exist_ok=True)
-        markdown = html_to_markdown_with_images(html, image_urls or [], article_dir)
-    elif download_images:
-        article_dir = os.path.dirname(filepath)
-        article_images_dir = os.path.join(article_dir, "images")
-        os.makedirs(article_images_dir, exist_ok=True)
-        markdown = process_images_in_markdown(markdown, image_urls or [], article_dir)
+        
+        if html:
+            markdown = html_to_markdown_with_images(html, image_urls or [], article_dir)
+        elif image_urls:
+            markdown = download_images_in_markdown(markdown, image_urls, article_dir)
 
     formatted_markdown = format_markdown_content(markdown)
 
@@ -636,8 +674,6 @@ tags: [web-crawler]
 ---
 
 # {title}
-
-> 来源: [{url}]({url})
 
 ---
 

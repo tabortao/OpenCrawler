@@ -174,6 +174,24 @@ class XiaoHongShuCrawler:
                 cookie_dict[key] = value
         return cookie_dict
 
+    def _decode_unicode(self, s: str) -> str:
+        if not s:
+            return s
+        try:
+            import codecs
+            decoded = codecs.decode(s, 'unicode_escape')
+            return decoded
+        except Exception:
+            return s
+
+    def _decode_json_string(self, s: str) -> str:
+        if not s:
+            return s
+        try:
+            return s.replace('\\n', '\n').replace('\\t', '\t').replace('\\"', '"')
+        except Exception:
+            return s
+
     async def get_note_by_url(self, url: str) -> dict[str, Any]:
         note_id, xsec_token, xsec_source = self._parse_note_url(url)
         
@@ -271,7 +289,21 @@ class XiaoHongShuCrawler:
                 if json_start != -1:
                     brace_count = 0
                     json_end = json_start
+                    in_string = False
+                    escape_next = False
+                    
                     for i, char in enumerate(html[json_start:], json_start):
+                        if escape_next:
+                            escape_next = False
+                            continue
+                        if char == '\\':
+                            escape_next = True
+                            continue
+                        if char == '"' and not escape_next:
+                            in_string = not in_string
+                            continue
+                        if in_string:
+                            continue
                         if char == '{':
                             brace_count += 1
                         elif char == '}':
@@ -303,6 +335,29 @@ class XiaoHongShuCrawler:
                                 }
                         except json.JSONDecodeError as e:
                             print(f"[XiaoHongShuCrawler] JSON 解析失败: {e}")
+                            image_urls = re.findall(r'"urlDefault"\s*:\s*"([^"]+)"', html)
+                            image_urls += re.findall(r'"url_default"\s*:\s*"([^"]+)"', html)
+                            
+                            title = ""
+                            title_match = re.search(r'<title>([^<]+)</title>', html)
+                            if title_match:
+                                title = title_match.group(1).replace(" - 小红书", "").strip()
+                            
+                            desc_match = re.search(r'"desc"\s*:\s*"([^"]*)"', html)
+                            desc = desc_match.group(1) if desc_match else ""
+                            desc = self._decode_json_string(desc)
+                            
+                            if title or desc or image_urls:
+                                return {
+                                    "note_id": note_id,
+                                    "title": title,
+                                    "desc": desc,
+                                    "type": "normal",
+                                    "user": {},
+                                    "image_list": [{"url": self._decode_unicode(url), "url_default": self._decode_unicode(url)} for url in image_urls[:9]],
+                                    "video": {},
+                                    "interact_info": {},
+                                }
             
             title_match = re.search(r'<title>([^<]+)</title>', html)
             if title_match:
@@ -311,13 +366,17 @@ class XiaoHongShuCrawler:
                 desc_match = re.search(r'<meta name="description" content="([^"]*)"', html)
                 desc = desc_match.group(1) if desc_match else ""
                 
+                image_urls = re.findall(r'data-src="([^"]+)"', html)
+                image_urls += re.findall(r'src="https://[^"]*xhscdn[^"]*"', html)
+                image_list = [{"url": url, "url_default": url} for url in image_urls[:9]]
+                
                 return {
                     "note_id": note_id,
                     "title": title,
                     "desc": desc,
                     "type": "normal",
                     "user": {},
-                    "image_list": [],
+                    "image_list": image_list,
                     "video": {},
                     "interact_info": {},
                 }
@@ -473,8 +532,6 @@ def convert_note_to_markdown(note: dict, url: str) -> str:
     interact_info = note.get("interact_info", {})
     
     lines = [
-        f"# {title}",
-        "",
         f"> 作者: {nickname}",
         f"> 来源: [{url}]({url})",
         "",

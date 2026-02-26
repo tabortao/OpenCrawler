@@ -11,7 +11,7 @@ import httpx
 from dotenv import load_dotenv
 from playwright.sync_api import sync_playwright
 
-from markdown_converter import convert_html_to_markdown, extract_images_from_html
+from markdown_converter import convert_html_to_markdown, extract_images_from_html, generate_markdown_document
 from utils import (
     clean_markdown,
     detect_platform,
@@ -268,6 +268,97 @@ class WebCrawler:
         result = '\n'.join(cleaned_lines)
         result = re.sub(r'\n{4,}', '\n\n\n', result)
         return result.strip()
+    
+    def _clean_wechat_content(self, markdown: str) -> str:
+        """
+        清理微信公众号 Markdown 内容
+        
+        移除视频播放器、导航栏等无关内容
+        """
+        lines = markdown.split('\n')
+        
+        skip_patterns = [
+            r'^S 全屏播放',
+            r'^full_screen_mv',
+            r'^已关注',
+            r'^关注\s*$',
+            r'^重播',
+            r'^分享\s*$',
+            r'^点赞后',
+            r'^赞\s*$',
+            r'^随便看看',
+            r'^有拓展内容',
+            r'^广告内容',
+            r'^关闭\*\*观看更多\*\*',
+            r'^更多\s*$',
+            r'^\*退出全屏',
+            r'^\*切换到竖屏全屏',
+            r'^\*全屏\*',
+            r'^\d+/\d+$',
+            r'^\d+:\d+/\d+:\d+',
+            r'^切换到横屏模式',
+            r'^继续播放',
+            r'^进度条',
+            r'^播放',
+            r'^倍速',
+            r'^超清流畅',
+            r'^您的浏览器不支持',
+            r'^继续观看',
+            r'^观看更多',
+            r'^原创',
+            r'^已同步到看一看',
+            r'^写下你的评论',
+            r'^E 视频播放器',
+            r'^S 视频社交',
+            r'^视频详情',
+            r'^空格的键盘已关注',
+            r'^分享点赞在看',
+            r'^已同步到看一看',
+            r'^0/0$',
+            r'^00:00/',
+            r'^倍速播放中',
+            r'^0\.5倍',
+            r'^1\.0倍',
+            r'^1\.5倍',
+            r'^2\.0倍',
+        ]
+        
+        def is_skip_line(line: str) -> bool:
+            stripped = line.strip()
+            if not stripped:
+                return False
+            for pattern in skip_patterns:
+                if re.match(pattern, stripped):
+                    return True
+            if re.match(r'^\d+:\d+/\d+:\d+', stripped):
+                return True
+            if re.match(r'^\d+/\d+$', stripped):
+                return True
+            return False
+        
+        cleaned_lines = []
+        prev_line = None
+        
+        for line in lines:
+            stripped = line.strip()
+            
+            if is_skip_line(line):
+                continue
+            
+            if stripped and stripped == prev_line:
+                continue
+            
+            if '<span class=' in stripped:
+                continue
+            
+            cleaned_lines.append(line)
+            if stripped:
+                prev_line = stripped
+        
+        result = '\n'.join(cleaned_lines)
+        result = re.sub(r'\n{4,}', '\n\n\n', result)
+        
+        return result.strip()
 
     def _is_zhihu_cookie_expired(self, html: str, title: str) -> bool:
         """
@@ -426,6 +517,8 @@ class WebCrawler:
 
                 if platform == "zhihu":
                     markdown = self._clean_zhihu_content(markdown)
+                elif platform == "wechat":
+                    markdown = self._clean_wechat_content(markdown)
 
                 if not markdown or len(markdown) < 50:
                     body_text = page.evaluate("() => document.body.innerText")
@@ -433,6 +526,8 @@ class WebCrawler:
                         markdown = body_text
                         if platform == "zhihu":
                             markdown = self._clean_zhihu_content(markdown)
+                        elif platform == "wechat":
+                            markdown = self._clean_wechat_content(markdown)
 
                 if not markdown or len(markdown) < 50:
                     raise ValueError("无法提取页面内容，可能需要登录或内容为空")
@@ -632,22 +727,19 @@ def save_article(title: str, url: str, markdown: str, html: str = "", image_urls
             markdown = download_images_in_markdown(markdown, image_urls, article_dir)
 
     formatted_markdown = format_markdown_content(markdown)
+    
+    publish_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    header = f"""---
-title: {title}
-url: {url}
-date: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
-tags: [web-crawler]
----
-
-# {title}
-
----
-
-"""
+    full_document = generate_markdown_document(
+        title=title,
+        author="",
+        publish_time=publish_time,
+        content=formatted_markdown,
+        source_url=url,
+    )
 
     with open(filepath, "w", encoding="utf-8") as f:
-        f.write(header + formatted_markdown)
+        f.write(full_document)
 
     return filepath
 

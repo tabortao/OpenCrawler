@@ -86,10 +86,18 @@ class ImageDownloader:
                 "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
             }
             
-            if "sspai.com" in clean_url:
+            # 少数派图片需要 Referer
+            if "sspai.com" in clean_url or "cdnfile.sspai.com" in clean_url or "cdn-static.sspai.com" in clean_url:
                 headers["Referer"] = "https://sspai.com/"
-            elif "cdnfile.sspai.com" in clean_url or "cdn-static.sspai.com" in clean_url:
-                headers["Referer"] = "https://sspai.com/"
+            # 微信图片需要 Referer
+            elif "mmbiz.qpic.cn" in clean_url or "wx.qlogo.cn" in clean_url or "mp.weixin.qq.com" in clean_url:
+                headers["Referer"] = "https://mp.weixin.qq.com/"
+            # 知乎图片
+            elif "zhimg.com" in clean_url or "zhihu.com" in clean_url:
+                headers["Referer"] = "https://www.zhihu.com/"
+            # 小红书图片
+            elif "xiaohongshu.com" in clean_url or "xhscdn.com" in clean_url or "sns-webpic-qc.xhscdn.com" in clean_url:
+                headers["Referer"] = "https://www.xiaohongshu.com/"
             
             response = self.client.get(clean_url, headers=headers)
             if response.status_code != 200:

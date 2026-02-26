@@ -49,6 +49,8 @@ def detect_platform(url: str) -> str:
         return "xiaohongshu"
     elif "mp.weixin.qq.com" in url_lower:
         return "wechat"
+    elif "sspai.com" in url_lower:
+        return "sspai"
     else:
         return "generic"
 
@@ -74,6 +76,11 @@ def get_platform_config(platform: str) -> dict[str, Any]:
             "selector": ".rich_media_content",
             "timeout": 15000,
             "scroll_times": 2,
+        },
+        "sspai": {
+            "selector": "article, .article-content, .content",
+            "timeout": 15000,
+            "scroll_times": 3,
         },
         "generic": {
             "selector": "article, .content, .post, main",

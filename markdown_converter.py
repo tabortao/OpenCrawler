@@ -86,6 +86,8 @@ def convert_html_to_markdown(
         _process_zhihu_content(soup)
     elif platform == "xiaohongshu":
         _process_xiaohongshu_content(soup)
+    elif platform == "sspai":
+        _process_sspai_content(soup)
     
     markdown = _convert_element_to_markdown(soup, platform)
     
@@ -98,20 +100,25 @@ def _process_wechat_content(soup: BeautifulSoup) -> None:
     """
     处理微信公众号内容
     
-    - 将 data-src 属性转换为 src 属性
+    - 将 data-src/data-original 属性转换为 src 属性
     - 移除微信特定的无用标签和属性
     - 识别微信样式的标题（通过 span + textstyle + font-weight: bold）
     """
     imgs = list(soup.find_all("img"))
     
     for img in imgs:
+        data_original = img.get("data-original", "")
         data_src = img.get("data-src", "")
         src = img.get("src", "")
         
+        # 优先级: data-original > data-src > src
+        valid_data_original = data_original and not data_original.startswith("data:") and data_original != "..." and len(data_original) > 10
         valid_data_src = data_src and not data_src.startswith("data:") and data_src != "..." and len(data_src) > 10
         valid_src = src and not src.startswith("data:") and src != "..." and len(src) > 10
         
-        if valid_data_src:
+        if valid_data_original:
+            img["src"] = data_original
+        elif valid_data_src:
             img["src"] = data_src
         elif valid_src:
             pass
@@ -205,6 +212,61 @@ def _process_xiaohongshu_content(soup: BeautifulSoup) -> None:
         span.unwrap()
 
 
+def _process_sspai_content(soup: BeautifulSoup) -> None:
+    """
+    处理少数派内容
+    
+    - 将 data-original 属性转换为 src 属性（高清原图）
+    - 移除头像、评论等非正文图片
+    - 移除侧边栏、推荐文章等无关内容
+    """
+    imgs = list(soup.find_all("img"))
+    
+    for img in imgs:
+        data_original = img.get("data-original", "")
+        src = img.get("src", "")
+        
+        # 跳过头像和缩略图（通过 URL 特征判断）
+        # 注意：检查 data-original 和 src 两个属性
+        check_url = data_original or src
+        if check_url and ("avatar" in check_url.lower() or 
+                          "/thumbnail/" in check_url.lower() or 
+                          "!32x32" in check_url or "!72x72" in check_url or 
+                          "!84x84" in check_url or "!100x100" in check_url or
+                          "/avatar/" in check_url.lower()):
+            img.decompose()
+            continue
+        
+        # 优先使用 data-original（高清原图）
+        if data_original and not data_original.startswith("data:") and len(data_original) > 10:
+            # 移除 URL 中的图片处理参数，获取原始图片
+            if "?" in data_original:
+                data_original = data_original.split("?")[0]
+            img["src"] = data_original
+        elif src and not src.startswith("data:") and len(src) > 10:
+            # 如果只有 src，也移除图片处理参数
+            if "?" in src:
+                src = src.split("?")[0]
+            img["src"] = src
+        else:
+            img.decompose()
+            continue
+        
+        # 清理其他属性
+        for attr in list(img.attrs.keys()):
+            if attr not in ["src", "alt", "title"]:
+                del img[attr]
+    
+    # 移除侧边栏、评论区域
+    for tag in soup.find_all(class_=["sidebar", "comments", "related-articles", "article__card"]):
+        tag.decompose()
+    
+    # 移除 Vue 组件标记
+    for tag in soup.find_all(attrs={"data-v-cecd8240": True}):
+        if tag.name in ["div", "section"] and not tag.get_text(strip=True):
+            tag.decompose()
+
+
 def _convert_element_to_markdown(element, platform: str = "generic") -> str:
     """
     递归转换 HTML 元素为 Markdown
@@ -288,12 +350,19 @@ def _convert_element_to_markdown(element, platform: str = "generic") -> str:
         return content
     
     elif tag_name == "img":
-        src = element.get("src") or element.get("data-src", "")
+        # 优先级: data-original > data-src > src
+        # data-original 用于少数派等网站的高清原图
+        # data-src 用于微信公众号等网站的懒加载图片
+        # src 是默认的图片地址
+        src = element.get("data-original") or element.get("data-src") or element.get("src", "")
         alt = element.get("alt", "图片")
         if src:
             src = html_unescape(src)
             if src.startswith("//"):
                 src = "https:" + src
+            # 移除图片处理参数（如 ?imageView2/2/format/webp）
+            if "?" in src:
+                src = src.split("?")[0]
             return f"\n\n![{alt}]({src})\n\n"
         return ""
     
@@ -518,10 +587,19 @@ def extract_images_from_html(html_content: str) -> list[str]:
     image_urls = []
     
     for img in soup.find_all("img"):
+        data_original = img.get("data-original", "")
         data_src = img.get("data-src", "")
         src = img.get("src", "")
         
-        src = data_src if data_src and not data_src.startswith("data:") else src
+        # 优先级: data-original > data-src > src
+        # data-original 用于少数派等网站的高清原图
+        # data-src 用于微信公众号等网站的懒加载图片
+        # src 是默认的图片地址
+        if data_original and not data_original.startswith("data:"):
+            src = data_original
+        elif data_src and not data_src.startswith("data:"):
+            src = data_src
+        # src 已经有值
         
         if not src or src.startswith("data:"):
             continue
@@ -532,6 +610,11 @@ def extract_images_from_html(html_content: str) -> list[str]:
         src = html_unescape(src)
         if src.startswith("//"):
             src = "https:" + src
+        
+        # 移除图片处理参数（如 ?imageView2/2/format/webp）
+        # 这样可以获取原始高清图片
+        if "?" in src:
+            src = src.split("?")[0]
         
         if src not in image_urls:
             image_urls.append(src)

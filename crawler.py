@@ -42,6 +42,7 @@ class ImageDownloader:
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
                 "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
                 "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+                "Referer": "https://sspai.com/",
             },
         )
         self.downloaded: dict[str, str] = {}
@@ -78,7 +79,19 @@ class ImageDownloader:
             if clean_url.startswith("//"):
                 clean_url = "https:" + clean_url
 
-            response = self.client.get(clean_url)
+            # 根据图片 URL 设置 Referer
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+                "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+                "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+            }
+            
+            if "sspai.com" in clean_url:
+                headers["Referer"] = "https://sspai.com/"
+            elif "cdnfile.sspai.com" in clean_url or "cdn-static.sspai.com" in clean_url:
+                headers["Referer"] = "https://sspai.com/"
+            
+            response = self.client.get(clean_url, headers=headers)
             if response.status_code != 200:
                 return None
 

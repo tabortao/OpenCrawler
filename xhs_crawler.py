@@ -547,7 +547,33 @@ class XiaoHongShuCrawler:
             print(f"[XiaoHongShuCrawler] 关闭 Playwright 时出错: {e}")
 
 
+def _remove_xhs_tags(text: str) -> str:
+    """
+    移除小红书话题标签
+    
+    将 #xxx[话题]# 格式的标签完全移除，保留原有换行
+    """
+    if not text:
+        return ""
+    
+    xhs_tag_pattern = r'[ \t]*#([^#\[\]]+)\[话题\]#[ \t]*'
+    text = re.sub(xhs_tag_pattern, '', text)
+    text = re.sub(r'[ \t]+', ' ', text)
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    return text.strip()
+
+
 def convert_note_to_markdown(note: dict, url: str) -> str:
+    """
+    将小红书笔记转换为 Markdown 格式
+    
+    Args:
+        note: 笔记数据字典，包含 title、desc、image_list 等字段
+        url: 笔记原始链接
+    
+    Returns:
+        转换后的 Markdown 文本
+    """
     title = note.get("title", "小红书笔记")
     desc = note.get("desc", "")
     image_list = note.get("image_list", [])
@@ -560,6 +586,7 @@ def convert_note_to_markdown(note: dict, url: str) -> str:
     ]
     
     if desc:
+        desc = _remove_xhs_tags(desc)
         lines.append(desc)
         lines.append("")
     
@@ -576,12 +603,51 @@ def convert_note_to_markdown(note: dict, url: str) -> str:
 
 
 async def crawl_xiaohongshu(url: str, headless: bool = True) -> dict[str, Any]:
+    """
+    爬取小红书笔记
+    
+    Args:
+        url: 小红书笔记链接
+        headless: 是否使用无头模式
+    
+    Returns:
+        包含笔记信息的字典
+    
+    Raises:
+        ValueError: 当 Cookie 过期或无法获取内容时抛出
+    """
     crawler = XiaoHongShuCrawler()
     try:
         await crawler.start(headless=headless)
+        
+        # 检查登录状态
+        is_logged_in = await crawler.check_login_state()
+        if not is_logged_in:
+            raise ValueError(
+                "小红书 Cookie 已过期，请更新 Cookie。\n"
+                "解决方法：\n"
+                "1. 打开小红书网页版并登录\n"
+                "2. 按 F12 打开开发者工具，在 Application -> Cookies 中复制 Cookie\n"
+                "3. 更新 .env 文件中的 XHS_COOKIE 变量"
+            )
+        
         note = await crawler.get_note_by_url(url)
         
         if note:
+            # 检查是否获取到有效内容
+            title = note.get("title", "")
+            desc = note.get("desc", "")
+            image_list = note.get("image_list", [])
+            
+            if not title and not desc and not image_list:
+                raise ValueError(
+                    "无法获取笔记内容，可能是 Cookie 已过期。\n"
+                    "解决方法：\n"
+                    "1. 打开小红书网页版并登录\n"
+                    "2. 按 F12 打开开发者工具，在 Application -> Cookies 中复制 Cookie\n"
+                    "3. 更新 .env 文件中的 XHS_COOKIE 变量"
+                )
+            
             markdown = convert_note_to_markdown(note, url)
             return {
                 "title": note.get("title", "小红书笔记"),
@@ -590,6 +656,11 @@ async def crawl_xiaohongshu(url: str, headless: bool = True) -> dict[str, Any]:
                 "note": note,
             }
         else:
-            raise ValueError("无法获取笔记内容")
+            raise ValueError(
+                "无法获取笔记内容，可能是 Cookie 已过期或链接无效。\n"
+                "解决方法：\n"
+                "1. 检查链接是否正确\n"
+                "2. 更新 .env 文件中的 XHS_COOKIE 变量"
+            )
     finally:
         await crawler.close()

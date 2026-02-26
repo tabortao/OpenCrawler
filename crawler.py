@@ -269,6 +269,31 @@ class WebCrawler:
         result = re.sub(r'\n{4,}', '\n\n\n', result)
         return result.strip()
 
+    def _is_zhihu_cookie_expired(self, html: str, title: str) -> bool:
+        """
+        检测知乎 Cookie 是否过期
+        
+        Args:
+            html: 页面 HTML 内容
+            title: 页面标题
+        
+        Returns:
+            True 表示 Cookie 已过期，False 表示正常
+        """
+        expired_indicators = [
+            "你似乎来到了没有知识存在的荒原",
+            "登录知乎",
+            "注册知乎",
+            "安全验证",
+            "请验证您的身份",
+        ]
+        
+        for indicator in expired_indicators:
+            if indicator in html or indicator in title:
+                return True
+        
+        return False
+
     def _extract_main_content(self, page, platform: str) -> tuple[str, list[str]]:
         selectors_map = {
             "zhihu": [
@@ -385,6 +410,15 @@ class WebCrawler:
 
                 if platform == "zhihu":
                     title = self._clean_zhihu_title(title)
+                    # 检测知乎 Cookie 是否过期
+                    if self._is_zhihu_cookie_expired(html_content, title):
+                        raise ValueError(
+                            "知乎 Cookie 已过期，请更新 Cookie。\n"
+                            "解决方法：\n"
+                            "1. 打开知乎网页版并登录\n"
+                            "2. 按 F12 打开开发者工具，在 Application -> Cookies 中复制 Cookie\n"
+                            "3. 更新 .env 文件中的 ZHIHU_COOKIE 变量"
+                        )
 
                 main_content, image_urls = self._extract_main_content(page, platform)
 

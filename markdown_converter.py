@@ -102,11 +102,22 @@ def _process_wechat_content(soup: BeautifulSoup) -> None:
     - 移除微信特定的无用标签和属性
     - 识别微信样式的标题（通过 span + textstyle + font-weight: bold）
     """
-    for img in soup.find_all("img"):
-        data_src = img.get("data-src")
-        if data_src:
+    imgs = list(soup.find_all("img"))
+    
+    for img in imgs:
+        data_src = img.get("data-src", "")
+        src = img.get("src", "")
+        
+        valid_data_src = data_src and not data_src.startswith("data:") and data_src != "..." and len(data_src) > 10
+        valid_src = src and not src.startswith("data:") and src != "..." and len(src) > 10
+        
+        if valid_data_src:
             img["src"] = data_src
-            del img["data-src"]
+        elif valid_src:
+            pass
+        else:
+            img.decompose()
+            continue
         
         for attr in list(img.attrs.keys()):
             if attr not in ["src", "alt", "title"]:
@@ -124,7 +135,7 @@ def _process_wechat_content(soup: BeautifulSoup) -> None:
     _convert_wechat_style_headings(soup)
     
     for span in soup.find_all("span"):
-        if not span.get_text(strip=True):
+        if not span.get_text(strip=True) and not span.find_all("img"):
             span.decompose()
     
     for tag in soup.find_all(id=["js_content_video", "js_player"]):
@@ -507,11 +518,22 @@ def extract_images_from_html(html_content: str) -> list[str]:
     image_urls = []
     
     for img in soup.find_all("img"):
-        src = img.get("src") or img.get("data-src")
-        if src and not src.startswith("data:"):
-            src = html_unescape(src)
-            if src.startswith("//"):
-                src = "https:" + src
+        data_src = img.get("data-src", "")
+        src = img.get("src", "")
+        
+        src = data_src if data_src and not data_src.startswith("data:") else src
+        
+        if not src or src.startswith("data:"):
+            continue
+        
+        if src == "..." or len(src) < 10:
+            continue
+        
+        src = html_unescape(src)
+        if src.startswith("//"):
+            src = "https:" + src
+        
+        if src not in image_urls:
             image_urls.append(src)
     
     return image_urls

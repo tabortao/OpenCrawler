@@ -25,6 +25,7 @@ class ImageDownloader:
         "zhihu": "https://www.zhihu.com/",
         "xiaohongshu": "https://www.xiaohongshu.com/",
         "github": "https://github.com/",
+        "toutiao": "https://www.toutiao.com/",
     }
     
     PLATFORM_DOMAINS = {
@@ -33,6 +34,7 @@ class ImageDownloader:
         "zhihu": ["zhimg.com", "zhihu.com"],
         "xiaohongshu": ["xiaohongshu.com", "xhscdn.com", "sns-webpic-qc.xhscdn.com"],
         "github": ["github.com", "githubusercontent.com", "raw.githubusercontent.com", "camo.githubusercontent.com", "user-images.githubusercontent.com"],
+        "toutiao": ["toutiao.com", "p3-sign.toutiaoimg.com", "p6-sign.toutiaoimg.com", "p9-sign.toutiaoimg.com"],
     }
     
     def __init__(self, output_dir: str):
@@ -51,6 +53,11 @@ class ImageDownloader:
             headers=self._get_default_headers(),
         )
         self.downloaded: dict[str, str] = {}
+        
+        # 用于今日头条图片的浏览器实例
+        self._playwright = None
+        self._browser = None
+        self._context = None
     
     def _get_default_headers(self) -> dict:
         """获取默认请求头"""
@@ -58,6 +65,12 @@ class ImageDownloader:
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
             "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
             "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+            "Accept-Encoding": "gzip, deflate, br",
+            "Connection": "keep-alive",
+            "Upgrade-Insecure-Requests": "1",
+            "Sec-Fetch-Dest": "image",
+            "Sec-Fetch-Mode": "no-cors",
+            "Sec-Fetch-Site": "cross-site",
         }
     
     def _detect_platform_from_url(self, url: str) -> Optional[str]:
@@ -160,9 +173,78 @@ class ImageDownloader:
         
         return url
     
-    def download_image(self, url: str) -> Optional[str]:
+    async def _download_with_playwright(self, url: str) -> Optional[bytes]:
         """
-        下载图片到本地
+        使用 Playwright 下载图片
+        
+        Args:
+            url: 图片 URL
+        
+        Returns:
+            图片内容，失败返回 None
+        """
+        from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
+        
+        try:
+            if not self._playwright:
+                self._playwright = await async_playwright().start()
+                self._browser = await self._playwright.chromium.launch(
+                    headless=True,
+                    args=[
+                        "--no-sandbox",
+                        "--disable-setuid-sandbox",
+                        "--disable-dev-shm-usage",
+                        "--disable-gpu",
+                        "--remote-debugging-port=9222",
+                    ],
+                )
+                self._context = await self._browser.new_context(
+                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+                    viewport={"width": 1920, "height": 1080},
+                    locale="zh-CN",
+                    timezone_id="Asia/Shanghai",
+                )
+            
+            page = await self._context.new_page()
+            
+            # 导航到图片 URL
+            await page.goto(url, wait_until="networkidle", timeout=30000)
+            
+            # 直接获取页面内容
+            content = await page.content()
+            
+            # 检查是否为图片
+            if "<html" in content:
+                # 如果返回的是 HTML，可能是 403 页面
+                print(f"Playwright got HTML instead of image for {url[:50]}...")
+                return None
+            
+            # 获取图片内容
+            response = await page.request.get(url)
+            if response.status == 200:
+                content = await response.body()
+                return content
+            else:
+                print(f"Playwright HTTP {response.status} for {url[:50]}...")
+                return None
+            
+            return None
+        
+        except PlaywrightTimeoutError:
+            print(f"Playwright timeout for {url[:50]}...")
+            return None
+        except Exception as e:
+            print(f"Playwright error for {url[:50]}... Error: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+        finally:
+            if 'page' in locals():
+                await page.close()
+    
+    async def _download_image_async(self, url: str) -> Optional[str]:
+        """
+        异步下载图片
         
         Args:
             url: 图片 URL
@@ -176,34 +258,67 @@ class ImageDownloader:
         try:
             clean_url = self._clean_url(url)
             
-            headers = self._get_default_headers()
-            referer = self._get_referer_for_url(clean_url)
-            if referer:
-                headers["Referer"] = referer
+            # 检测是否为今日头条图片
+            if "toutiao" in clean_url.lower():
+                # 使用 Playwright 下载今日头条图片
+                print(f"使用 Playwright 下载今日头条图片: {clean_url[:50]}...")
+                content = await self._download_with_playwright(clean_url)
+            else:
+                # 使用 httpx 下载其他图片
+                headers = self._get_default_headers()
+                referer = self._get_referer_for_url(clean_url)
+                if referer:
+                    headers["Referer"] = referer
+                
+                response = self.client.get(clean_url, headers=headers, timeout=30, follow_redirects=True)
+                
+                if response.status_code != 200:
+                    print(f"HTTP {response.status_code} for {clean_url[:50]}...")
+                    return None
+                
+                content = response.content
             
-            response = self.client.get(clean_url, headers=headers)
-            if response.status_code != 200:
+            # 检查响应内容
+            if not content or len(content) < 100:
+                print(f"Empty or small content for {clean_url[:50]}...")
                 return None
             
-            content_type = response.headers.get("content-type", "")
-            content = response.content
-            ext = self._get_image_extension(url, content_type, content)
+            # 获取图片扩展名
+            ext = self._get_image_extension(url, content_type="", content=content)
             
+            # 生成文件名，使用完整的 URL（包含查询参数）来确保唯一性
             url_hash = hashlib.md5(url.encode()).hexdigest()[:12]
             safe_hash = ''.join(c for c in url_hash if c.isalnum())
             filename = f"{safe_hash}{ext}"
             filepath = os.path.join(self.images_dir, filename)
             
+            # 保存图片
             with open(filepath, "wb") as f:
                 f.write(content)
             
             relative_path = f"images/{filename}"
             self.downloaded[url] = relative_path
+            print(f"Downloaded: {relative_path}")
             return relative_path
         
         except Exception as e:
             print(f"Failed to download image: {url[:50]}... Error: {e}")
+            import traceback
+            traceback.print_exc()
             return None
+    
+    def download_image(self, url: str) -> Optional[str]:
+        """
+        下载图片到本地
+        
+        Args:
+            url: 图片 URL
+        
+        Returns:
+            本地相对路径，失败返回 None
+        """
+        import asyncio
+        return asyncio.run(self._download_image_async(url))
     
     def download_images(self, urls: list[str]) -> dict[str, Optional[str]]:
         """
@@ -221,8 +336,35 @@ class ImageDownloader:
         return results
     
     def close(self):
-        """关闭 HTTP 客户端"""
+        """关闭 HTTP 客户端和浏览器"""
+        # 关闭 HTTP 客户端
         self.client.close()
+        
+        # 关闭 Playwright
+        import asyncio
+        async def close_playwright():
+            try:
+                if self._context:
+                    await self._context.close()
+                    self._context = None
+            except Exception:
+                pass
+            
+            try:
+                if self._browser:
+                    await self._browser.close()
+                    self._browser = None
+            except Exception:
+                pass
+            
+            try:
+                if self._playwright:
+                    await self._playwright.stop()
+                    self._playwright = None
+            except Exception:
+                pass
+        
+        asyncio.run(close_playwright())
     
     def __enter__(self):
         return self

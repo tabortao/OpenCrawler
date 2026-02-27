@@ -213,3 +213,7 @@ python -m pytest test/test_specific.py
 4. **配置更新**: 在 `app/core/config.py` 中添加新设置
 5. **图像处理**: 修改 `app/crawlers/image_downloader.py` 或 `app/converters/image_extractor.py`
 
+## 平台特定经验
+
+- **今日头条图片下载**: 参考 [今日头条图片下载指南](../documents/toutiao_image_download_guide.md) 了解如何处理今日头条的图片下载问题，其他插件开发时可参考本指南。
+

@@ -127,13 +127,25 @@ def save_article(
     filename = f"{today}_{safe_title}.md"
     filepath = get_unique_filepath(output_dir, filename)
     
+    print(f"保存文章: {title}")
+    print(f"下载图片: {download_images}")
+    print(f"HTML 长度: {len(html) if html else 0}")
+    print(f"图片 URL 数量: {len(image_urls) if image_urls else 0}")
+    print(f"平台: {platform}")
+    
     if download_images:
         article_dir = os.path.dirname(filepath)
         
         if html:
+            print("使用 html_to_markdown_with_images")
             markdown = html_to_markdown_with_images(html, image_urls or [], article_dir, platform)
         elif image_urls:
+            print("使用 download_images_in_markdown")
             markdown = download_images_in_markdown(markdown, image_urls, article_dir)
+        else:
+            print("没有 HTML 和图片 URL，跳过下载")
+    else:
+        print("未启用图片下载")
     
     formatted_markdown = format_markdown_content(markdown)
     
@@ -150,6 +162,7 @@ def save_article(
     with open(filepath, "w", encoding="utf-8") as f:
         f.write(full_document)
     
+    print(f"文章保存到: {filepath}")
     return filepath
 
 
@@ -163,10 +176,20 @@ def html_to_markdown_with_images(
     if not html:
         return ""
     
-    with ImageDownloader(output_dir) as downloader:
-        markdown = MarkdownConverter.convert_html_to_markdown(html, platform=platform)
-        markdown = ImageExtractor.replace_urls_with_downloader(markdown, downloader)
+    # 先转换为 Markdown
+    markdown = MarkdownConverter.convert_html_to_markdown(html, platform=platform)
+    
+    # 对于今日头条，直接返回原始 Markdown，保留原始图片 URL
+    if platform == "toutiao":
+        print("对于今日头条，保留原始图片 URL")
         return markdown
+    
+    # 对于其他平台，尝试下载图片
+    with ImageDownloader(output_dir) as downloader:
+        print("使用 ImageExtractor.replace_urls_with_downloader 下载图片")
+        markdown = ImageExtractor.replace_urls_with_downloader(markdown, downloader)
+    
+    return markdown
 
 
 def download_images_in_markdown(

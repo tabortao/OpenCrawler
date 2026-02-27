@@ -96,6 +96,8 @@ class MarkdownConverter(BaseConverter):
             MarkdownConverter._process_xiaohongshu_content(soup)
         elif platform == "sspai":
             MarkdownConverter._process_sspai_content(soup)
+        elif platform == "toutiao":
+            MarkdownConverter._process_toutiao_content(soup)
     
     @staticmethod
     def _process_wechat_content(soup: BeautifulSoup) -> None:
@@ -233,6 +235,43 @@ class MarkdownConverter(BaseConverter):
                 tag.decompose()
     
     @staticmethod
+    def _process_toutiao_content(soup: BeautifulSoup) -> None:
+        """处理今日头条内容"""
+        imgs = list(soup.find_all("img"))
+        
+        for img in imgs:
+            data_original = img.get("data-original", "")
+            data_src = img.get("data-src", "")
+            src = img.get("src", "")
+            
+            valid_data_original = data_original and not data_original.startswith("data:") and data_original != "..." and len(data_original) > 10
+            valid_data_src = data_src and not data_src.startswith("data:") and data_src != "..." and len(data_src) > 10
+            valid_src = src and not src.startswith("data:") and src != "..." and len(src) > 10
+            
+            if valid_data_original:
+                img["src"] = data_original
+            elif valid_data_src:
+                img["src"] = data_src
+            elif valid_src:
+                pass
+            else:
+                img.decompose()
+                continue
+            
+            # 确保 URL 是完整的
+            if img["src"].startswith("//"):
+                img["src"] = "https:" + img["src"]
+            
+            # 移除不需要的属性
+            for attr in list(img.attrs.keys()):
+                if attr not in ["src", "alt", "title"]:
+                    del img[attr]
+        
+        # 移除不需要的元素
+        for tag in soup.find_all(class_=["comments", "related-articles", "recommend", "advertisement"]):
+            tag.decompose()
+    
+    @staticmethod
     def _convert_element_to_markdown(element, platform: str = "generic") -> str:
         """递归转换 HTML 元素为 Markdown"""
         if isinstance(element, NavigableString):
@@ -312,14 +351,17 @@ class MarkdownConverter(BaseConverter):
             return content
         
         elif tag_name == "img":
+            # 尝试获取完整的图片 URL，包括查询参数
             src = element.get("data-original") or element.get("data-src") or element.get("src", "")
             alt = element.get("alt", "图片")
             if src:
                 src = html.unescape(src)
                 if src.startswith("//"):
                     src = "https:" + src
-                if "?" in src:
-                    src = src.split("?")[0]
+                # 对于今日头条图片，保留完整的 URL（包含查询参数）
+                if "toutiao" not in src:
+                    if "?" in src:
+                        src = src.split("?")[0]
                 return f"\n\n![{alt}]({src})\n\n"
             return ""
         

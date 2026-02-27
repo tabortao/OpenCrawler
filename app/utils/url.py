@@ -51,6 +51,8 @@ def detect_platform(url: str) -> str:
         return "wechat"
     elif "sspai.com" in url_lower:
         return "sspai"
+    elif "toutiao.com" in url_lower:
+        return "toutiao"
     else:
         return "generic"
 

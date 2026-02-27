@@ -55,8 +55,10 @@ class ImageExtractor:
             if src.startswith("//"):
                 src = "https:" + src
             
-            if "?" in src:
-                src = src.split("?")[0]
+            # 对于今日头条图片，保留完整的 URL（包含查询参数）
+            if "toutiao" not in src.lower():
+                if "?" in src:
+                    src = src.split("?")[0]
             
             if src not in image_urls:
                 image_urls.append(src)
@@ -206,6 +208,7 @@ class ImageExtractor:
             
             if local_path:
                 return f"![{alt_text}]({local_path})"
+            # 下载失败时保留原始 URL
             return match.group(0)
         
         return re.sub(pattern, replace_image_url, markdown)

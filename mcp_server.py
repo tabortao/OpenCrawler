@@ -339,14 +339,21 @@ def run_http_server(host: str, port: int, path: str):
 def run_sse_server(host: str, port: int):
     """运行 SSE 服务器"""
     import uvicorn
+    from starlette.applications import Starlette
+    from starlette.routing import Route, Mount
     
     _ensure_plugins_initialized()
     
-    app = mcp.sse_app()
+    sse_app = mcp.sse_app()
     
-    @app.route("/health", methods=["GET"])
-    async def health(request: Request) -> Response:
-        return JSONResponse({"status": "ok", "name": SERVER_NAME})
+    routes = [
+        Route("/health", endpoint=lambda request: JSONResponse({"status": "ok", "name": SERVER_NAME}), methods=["GET"]),
+    ]
+    
+    for route in sse_app.routes:
+        routes.append(route)
+    
+    app = Starlette(routes=routes)
     
     uvicorn.run(app, host=host, port=port, log_level="info")
 

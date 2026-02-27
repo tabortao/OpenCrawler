@@ -33,10 +33,10 @@ cp .env.example .env
 # stdio 模式（推荐 Cherry Studio）
 micromamba run -p ./venv python mcp_server.py stdio
 
-# SSE 模式（推荐 Cherry Studio HTTP 方式）
+# SSE 模式（推荐 Cherry Studio HTTP 方式），注意sse和http启动命令是不同的
 micromamba run -p ./venv python mcp_server.py sse --port 8765
 
-# HTTP 模式（推荐 Trae、Cursor）
+# HTTP 模式（推荐 Trae、Cursor），注意sse和http启动命令是不同的
 micromamba run -p ./venv python mcp_server.py http --port 8765
 ```
 
@@ -69,15 +69,18 @@ micromamba run -p ./venv python mcp_server.py http --port 8765
 ### 方法二：SSE 模式
 
 先启动服务器：
-
 ```bash
 micromamba run -p ./venv python mcp_server.py sse --port 8765
 ```
 
 然后在 Cherry Studio 中：
-
 1. 选择类型为 **SSE**
 2. URL 填写：`http://127.0.0.1:8765/sse`
+
+**SSE 模式工作原理**：
+1. 客户端连接 `/sse` 端点
+2. 服务器返回消息端点 URL（如 `/messages/?session_id=xxx`）
+3. 客户端通过该 URL 发送消息
 
 ### 方法三：Streamable HTTP 模式
 

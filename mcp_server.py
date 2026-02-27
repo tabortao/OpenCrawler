@@ -17,6 +17,7 @@ import asyncio
 import os
 import re
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -211,15 +212,16 @@ async def save_article(url: str, download_images: bool = False) -> dict[str, Any
     output_dir = settings.output_dir
     os.makedirs(output_dir, exist_ok=True)
     
+    today = datetime.now().strftime("%Y-%m-%d")
     safe_title = re.sub(r'[\\/*?:"<>|]', "_", result.title)
     safe_title = safe_title[:100]
     
-    filename = f"{safe_title}.md"
+    filename = f"{today}_{safe_title}.md"
     filepath = os.path.join(output_dir, filename)
     
     counter = 1
     while os.path.exists(filepath):
-        filename = f"{safe_title}_{counter}.md"
+        filename = f"{today}_{safe_title}_{counter}.md"
         filepath = os.path.join(output_dir, filename)
         counter += 1
     

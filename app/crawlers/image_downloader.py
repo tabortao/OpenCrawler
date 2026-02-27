@@ -6,6 +6,8 @@
 
 import hashlib
 import os
+import time
+from datetime import datetime
 from typing import Optional
 from urllib.parse import urlparse
 
@@ -44,6 +46,7 @@ class ImageDownloader:
         Args:
             output_dir: 输出目录
         """
+        self.output_dir = output_dir
         self.images_dir = os.path.join(output_dir, "images")
         os.makedirs(self.images_dir, exist_ok=True)
         
@@ -53,6 +56,9 @@ class ImageDownloader:
             headers=self._get_default_headers(),
         )
         self.downloaded: dict[str, str] = {}
+        
+        # 图片计数器，用于生成唯一文件名
+        self._image_counter = 0
         
         # 用于今日头条图片的浏览器实例
         self._playwright = None
@@ -286,17 +292,26 @@ class ImageDownloader:
             # 获取图片扩展名
             ext = self._get_image_extension(url, content_type="", content=content)
             
-            # 生成文件名，使用完整的 URL（包含查询参数）来确保唯一性
-            url_hash = hashlib.md5(url.encode()).hexdigest()[:12]
-            safe_hash = ''.join(c for c in url_hash if c.isalnum())
-            filename = f"{safe_hash}{ext}"
-            filepath = os.path.join(self.images_dir, filename)
+            # 生成文件名：日期+时间+自增计数器（更易读）
+            now = datetime.now()
+            date_time_str = now.strftime("%Y%m%d_%H%M%S")
+            self._image_counter += 1
+            filename = f"{date_time_str}_{self._image_counter:03d}{ext}"
+            
+            # 创建年月子目录
+            year = now.strftime("%Y")
+            month = now.strftime("%m")
+            sub_dir = os.path.join(self.images_dir, year, month)
+            os.makedirs(sub_dir, exist_ok=True)
+            
+            filepath = os.path.join(sub_dir, filename)
             
             # 保存图片
             with open(filepath, "wb") as f:
                 f.write(content)
             
-            relative_path = f"images/{filename}"
+            # 相对路径：images/年/月/文件名
+            relative_path = f"images/{year}/{month}/{filename}"
             self.downloaded[url] = relative_path
             print(f"Downloaded: {relative_path}")
             return relative_path
@@ -318,7 +333,27 @@ class ImageDownloader:
             本地相对路径，失败返回 None
         """
         import asyncio
-        return asyncio.run(self._download_image_async(url))
+        import concurrent.futures
+        
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        
+        if loop is not None:
+            def run_in_new_loop():
+                new_loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(new_loop)
+                try:
+                    return new_loop.run_until_complete(self._download_image_async(url))
+                finally:
+                    new_loop.close()
+            
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future = executor.submit(run_in_new_loop)
+                return future.result()
+        else:
+            return asyncio.run(self._download_image_async(url))
     
     def download_images(self, urls: list[str]) -> dict[str, Optional[str]]:
         """
@@ -342,6 +377,8 @@ class ImageDownloader:
         
         # 关闭 Playwright
         import asyncio
+        import concurrent.futures
+        
         async def close_playwright():
             try:
                 if self._context:
@@ -364,7 +401,25 @@ class ImageDownloader:
             except Exception:
                 pass
         
-        asyncio.run(close_playwright())
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        
+        if loop is not None:
+            def run_in_new_loop():
+                new_loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(new_loop)
+                try:
+                    return new_loop.run_until_complete(close_playwright())
+                finally:
+                    new_loop.close()
+            
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future = executor.submit(run_in_new_loop)
+                future.result()
+        else:
+            asyncio.run(close_playwright())
     
     def __enter__(self):
         return self

@@ -19,8 +19,10 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
-reference/*
-browser_data/*
+reference/
+browser_data/
+storage/
+test/
 
 # Virtual Environment
 venv/

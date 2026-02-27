@@ -242,6 +242,86 @@ class XiaoHongShuCrawler(BaseCrawler):
                 cookie_dict[key] = value
         return cookie_dict
     
+    def _decode_unicode(self, s: str) -> str:
+        """解码 Unicode 字符串"""
+        if not s:
+            return s
+        try:
+            if '\\u' in s:
+                result = []
+                i = 0
+                while i < len(s):
+                    if s[i] == '\\' and i + 1 < len(s) and s[i + 1] == 'u':
+                        if i + 5 < len(s):
+                            hex_str = s[i + 2:i + 6]
+                            try:
+                                result.append(chr(int(hex_str, 16)))
+                                i += 6
+                                continue
+                            except ValueError:
+                                pass
+                    result.append(s[i])
+                    i += 1
+                return ''.join(result)
+            return s
+        except Exception:
+            return s
+    
+    def _fix_encoding(self, s: str) -> str:
+        """
+        修复编码问题
+        
+        处理 UTF-8 内容被错误地当作 Latin-1 解码的情况
+        """
+        if not s:
+            return s
+        try:
+            if any(ord(c) > 127 and ord(c) < 256 for c in s):
+                try:
+                    fixed = s.encode('latin-1').decode('utf-8')
+                    return fixed
+                except (UnicodeDecodeError, UnicodeEncodeError):
+                    pass
+            return s
+        except Exception:
+            return s
+    
+    def _decode_json_string(self, s: str) -> str:
+        """解码 JSON 字符串"""
+        if not s:
+            return s
+        try:
+            return s.replace('\\n', '\n').replace('\\t', '\t').replace('\\"', '"')
+        except Exception:
+            return s
+    
+    def _extract_desc_from_html(self, html: str) -> str:
+        """从 HTML 中提取描述"""
+        if not html:
+            return ""
+        
+        desc = ""
+        
+        desc_matches = re.findall(r'"desc"\s*:\s*"((?:[^"\\]|\\.)*)"', html, re.DOTALL)
+        
+        if desc_matches:
+            for match in desc_matches:
+                decoded = self._decode_json_string(match)
+                try:
+                    decoded = self._decode_unicode(decoded)
+                except Exception:
+                    pass
+                decoded = self._fix_encoding(decoded)
+                if len(decoded) > len(desc):
+                    desc = decoded
+        
+        if not desc:
+            meta_match = re.search(r'<meta\s+name="description"\s+content="([^"]*)"', html)
+            if meta_match:
+                desc = meta_match.group(1)
+        
+        return desc.strip()
+    
     async def _get_note_by_url(self, url: str) -> Optional[dict]:
         """通过 URL 获取笔记"""
         note_id, xsec_token, xsec_source = self._parse_note_url(url)
@@ -384,7 +464,51 @@ class XiaoHongShuCrawler(BaseCrawler):
                                     "interact_info": note_detail.get("interactInfo", {}),
                                 }
                         except json.JSONDecodeError as e:
-                            print(f"[XiaoHongShuCrawler] JSON 解析失败: {e}")
+                            print(f"[XiaoHongShuCrawler] JSON 解析失败，使用备用方案: {e}")
+                            image_urls = re.findall(r'"urlDefault"\s*:\s*"([^"]+)"', html)
+                            image_urls += re.findall(r'"url_default"\s*:\s*"([^"]+)"', html)
+                            
+                            title = ""
+                            title_match = re.search(r'<title>([^<]+)</title>', html)
+                            if title_match:
+                                title = title_match.group(1).replace(" - 小红书", "").strip()
+                            
+                            desc = self._extract_desc_from_html(html)
+                            desc = self._fix_encoding(desc)
+                            
+                            if title or desc or image_urls:
+                                return {
+                                    "note_id": note_id,
+                                    "title": self._fix_encoding(title),
+                                    "desc": desc,
+                                    "type": "normal",
+                                    "user": {},
+                                    "image_list": [{"url": self._decode_unicode(url), "url_default": self._decode_unicode(url)} for url in image_urls[:9]],
+                                    "video": {},
+                                    "interact_info": {},
+                                }
+            
+            title_match = re.search(r'<title>([^<]+)</title>', html)
+            if title_match:
+                title = title_match.group(1).replace(" - 小红书", "").strip()
+                
+                desc = self._extract_desc_from_html(html)
+                desc = self._fix_encoding(desc)
+                
+                image_urls = re.findall(r'data-src="([^"]+)"', html)
+                image_urls += re.findall(r'src="https://[^"]*xhscdn[^"]*"', html)
+                image_list = [{"url": url, "url_default": url} for url in image_urls[:9]]
+                
+                return {
+                    "note_id": note_id,
+                    "title": self._fix_encoding(title),
+                    "desc": desc,
+                    "type": "normal",
+                    "user": {},
+                    "image_list": image_list,
+                    "video": {},
+                    "interact_info": {},
+                }
         except Exception as e:
             print(f"[XiaoHongShuCrawler] 提取笔记内容失败: {e}")
         
@@ -578,7 +702,7 @@ class XiaoHongShuPlugin(BasePlugin):
             name="xiaohongshu",
             version="1.0.0",
             description="小红书笔记内容提取插件",
-            author="MyCrawler",
+            author="OpenCrawler",
             platforms=["xiaohongshu"],
         )
     

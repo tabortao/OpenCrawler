@@ -1,5 +1,9 @@
 # 项目规则：OpenCrawler - 多平台网页 Markdown 提取 API
 
+## 项目概述
+
+OpenCrawler 是一个模块化的网页内容提取工具，将网页转换为 Markdown 格式。它使用插件架构，通过 FastAPI 提供 REST API 端点，使用 Playwright 进行浏览器自动化。
+
 ## 基本要求
 
 - 所有的 Python 测试脚本都放到 test 文件夹
@@ -26,6 +30,23 @@ OpenCrawler/
 ├── test/                    # 测试目录
 └── docs/                    # 文档目录
 ```
+
+## 架构概述
+
+### 核心结构
+- **API 层** (`app/api/`): FastAPI 端点，用于页面和文章
+- **插件系统** (`app/plugins/`): 平台特定的爬虫（GitHub、知乎、小红书、微信、少数派、通用）
+- **核心模块** (`app/core/`): 配置、异常和依赖项
+- **爬虫** (`app/crawlers/`): 基础爬虫类和图片下载器
+- **转换器** (`app/converters/`): HTML 到 Markdown 转换和图片提取
+- **工具** (`app/utils/`): URL 检测、文件操作和文本处理
+
+### 关键设计模式
+
+1. **插件架构**: 每个平台都实现为继承自 `BasePlugin` 的插件
+2. **工厂模式**: `CrawlerFactory` 根据 URL 检测创建适当的爬虫
+3. **依赖注入**: FastAPI 依赖项用于浏览器会话和配置
+4. **异常处理**: 带有结构化错误响应的自定义 `CrawlerException`
 
 ## API 列表
 
@@ -68,16 +89,39 @@ OUTPUT_DIR=output
 PROXY_URL=
 ZHIHU_COOKIE=
 XHS_COOKIE=
+BROWSER_HEADLESS=
+```
+
+## 开发设置
+
+```bash
+# 创建虚拟环境（使用 micromamba，如 README 所示）
+micromamba create -p ./venv python=3.11.4
+micromamba run -p ./venv pip install -r requirements.txt
+
+# 安装 Playwright 浏览器
+micromamba run -p ./venv playwright install chromium
+
+# 设置环境
+cp .env.example .env
+# 编辑 .env 文件配置 cookies 和设置
 ```
 
 ## 运行命令
 
 ```bash
+# 启动 FastAPI 服务器
+micromamba run -p ./venv python main.py
+
+# 或直接使用 uvicorn
+micromamba run -p ./venv uvicorn main:app --host 127.0.0.1 --port 8000
+
 # 使用新版入口（推荐）
 micromamba run -p ./venv python main_new.py
 
-# 使用原入口（兼容）
-micromamba run -p ./venv python main.py
+# API 文档可在以下地址获取：
+# - Swagger UI: http://127.0.0.1:8000/docs
+# - ReDoc: http://127.0.0.1:8000/redoc
 ```
 
 ## 测试 API
@@ -105,6 +149,16 @@ curl -X POST http://127.0.0.1:8000/api/v1/articles \
   -d '{"url": "https://mp.weixin.qq.com/s/xxx", "download_images": true}'
 ```
 
+## 测试
+
+```bash
+# 运行测试（添加测试文件后）
+python -m pytest test/
+
+# 运行特定测试文件
+python -m pytest test/test_specific.py
+```
+
 ## 注意事项
 
 ### uvicorn reload 模式问题
@@ -121,18 +175,41 @@ curl -X POST http://127.0.0.1:8000/api/v1/articles \
 
 ## 插件开发
 
-参考 `app/plugins/` 目录下的现有插件实现。每个插件需要：
+要添加新平台：
+1. 在 `app/plugins/new_platform/` 中创建插件目录
+2. 实现 `NewPlatformCrawler`（继承自 `BaseCrawler`）
+3. 实现 `NewPlatformPlugin`（继承自 `BasePlugin`）
+4. 在 `app/utils/url.py` 中添加 URL 检测逻辑
+5. 如有需要，在 `app/core/config.py` 中添加平台配置
 
-1. 继承 `BasePlugin` 和 `BaseCrawler`
-2. 实现 `extract` 方法
-3. 在 `__init__.py` 中导出 Plugin 类
-4. 在 `app/utils/url.py` 中添加平台检测
+## 文件结构导航
 
-## 废弃文件
+常见任务的关键文件：
+- **添加新 API 端点**: `app/api/router.py` + 新端点文件
+- **添加新平台**: `app/plugins/` 目录
+- **修改提取逻辑**: `app/crawlers/base.py` 和平台特定爬虫
+- **更改输出格式**: `app/converters/markdown.py`
+- **配置更改**: `app/core/config.py`
 
-以下文件已迁移到新模块，可以删除：
+## 错误处理
 
-- `crawler.py` → `app/crawlers/` 和 `app/plugins/`
-- `xhs_crawler.py` → `app/plugins/xiaohongshu/`
-- `markdown_converter.py` → `app/converters/markdown.py`
-- `utils.py` → `app/utils/`
+应用程序使用结构化错误处理：
+- `CrawlerException` 用于爬虫特定错误
+- FastAPI 异常处理程序用于一致的 API 响应
+- 整个应用程序的日志记录用于调试
+
+## 测试策略
+
+测试目录结构遵循主应用程序结构：
+- 单个组件的单元测试
+- API 端点的集成测试
+- 平台特定功能的插件测试
+
+## 常见开发任务
+
+1. **添加新平台插件**: 遵循现有插件（github、zhihu 等）的模式
+2. **修改提取行为**: 更新平台特定爬虫或基础爬虫
+3. **API 更改**: 更新 `app/api/` 中的端点并确保正确的请求/响应模型
+4. **配置更新**: 在 `app/core/config.py` 中添加新设置
+5. **图像处理**: 修改 `app/crawlers/image_downloader.py` 或 `app/converters/image_extractor.py`
+

@@ -22,7 +22,6 @@ wheels/
 reference/
 browser_data/
 storage/
-test/
 
 # Virtual Environment
 venv/

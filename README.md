@@ -106,7 +106,7 @@ micromamba run -p ./venv python main.py
 curl http://127.0.0.1:8000/api/v1/health
 
 # 获取网页标题
-curl "http://127.0.0.1:8000/api/v1/pages/title?url=https://github.com/user/repo"
+curl "http://127.0.0.1:8000/api/v1/pages/title?url=https://sspai.com/post/105218"
 
 # 提取页面内容
 curl -X POST http://127.0.0.1:8000/api/v1/pages/extract \
@@ -146,6 +146,9 @@ PROXY_URL=
 # 平台 Cookie（部分平台需要）
 ZHIHU_COOKIE=
 XHS_COOKIE=
+
+# 浏览器配置
+BROWSER_HEADLESS=
 ```
 
 ### Cookie 获取方法

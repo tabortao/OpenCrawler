@@ -92,32 +92,6 @@ async def health_check():
 app.include_router(api_router)
 
 
-@app.get("/extract", deprecated=True, tags=["已废弃"])
-async def extract_content_legacy(url: str):
-    """
-    [已废弃] 请使用 POST /api/v1/pages/extract
-    """
-    from app.api.pages import PageExtractRequest, extract_page
-    return await extract_page(PageExtractRequest(url=url))
-
-
-@app.get("/save", deprecated=True, tags=["已废弃"])
-async def save_content_legacy(url: str, download_images: bool = False):
-    """
-    [已废弃] 请使用 POST /api/v1/articles
-    """
-    from app.api.articles import ArticleCreateRequest, create_article
-    return await create_article(ArticleCreateRequest(url=url, download_images=download_images))
-
-
-@app.get("/health", deprecated=True, tags=["已废弃"])
-async def health_check_legacy():
-    """
-    [已废弃] 请使用 GET /api/v1/health
-    """
-    return await health_check()
-
-
 if __name__ == "__main__":
     uvicorn.run(
         "main:app",

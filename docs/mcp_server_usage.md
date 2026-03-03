@@ -270,6 +270,8 @@ micromamba run -p ./venv python mcp_server.py http --port 8765
 |------|------|------|------|
 | url | string | 是 | 网页 URL |
 | download_images | boolean | 否 | 是否下载图片 |
+| compress_images | boolean | 否 | 是否压缩图片（需要启用 download_images） |
+| compress_quality | integer | 否 | 压缩质量 (1-95)，默认 85 |
 
 ### list_platforms
 

@@ -190,21 +190,32 @@ async def get_page_title(url: str) -> dict[str, Any]:
         "文件保存到 output 目录。\n"
         "参数：\n"
         "- url: 网页链接（必需）\n"
-        "- download_images: 是否下载图片（可选，默认 false）"
+        "- download_images: 是否下载图片（可选，默认 false）\n"
+        "- compress_images: 是否压缩图片（可选，默认 false）\n"
+        "- compress_quality: 压缩质量 1-95（可选，默认 85）"
     ),
 )
-async def save_article(url: str, download_images: bool = False) -> dict[str, Any]:
+async def save_article(
+    url: str,
+    download_images: bool = False,
+    compress_images: bool = False,
+    compress_quality: int = 85,
+) -> dict[str, Any]:
     """
     保存文章为 Markdown 文件
     
     Args:
         url: 网页 URL
         download_images: 是否下载图片
+        compress_images: 是否压缩图片
+        compress_quality: 压缩质量 (1-95)
     
     Returns:
         保存结果
     """
     from app.core.config import settings
+    from app.crawlers.image_downloader import ImageDownloader
+    from app.converters.image_extractor import ImageExtractor
     
     normalized_url = _normalize_url(url)
     result = await _crawl_url(normalized_url, download_images)
@@ -225,19 +236,35 @@ async def save_article(url: str, download_images: bool = False) -> dict[str, Any
         filepath = os.path.join(output_dir, filename)
         counter += 1
     
+    markdown_content = result.markdown
+    compress_stats = {}
+    
+    # 下载并压缩图片
+    if download_images and result.image_urls:
+        article_dir = os.path.dirname(filepath)
+        with ImageDownloader(article_dir, compress=compress_images, compress_quality=compress_quality) as downloader:
+            markdown_content = ImageExtractor.replace_urls_with_downloader(result.markdown, downloader)
+            if compress_images:
+                compress_stats = downloader.get_compress_stats()
+    
     with open(filepath, "w", encoding="utf-8") as f:
         f.write(f"# {result.title}\n\n")
         f.write(f"**来源**: {normalized_url}\n\n")
         f.write("---\n\n")
-        f.write(result.markdown)
+        f.write(markdown_content)
     
-    return {
+    response = {
         "status": "success",
         "url": normalized_url,
         "title": result.title,
         "filepath": filepath,
         "image_count": len(result.image_urls),
     }
+    
+    if compress_images and compress_stats:
+        response["compress_stats"] = compress_stats
+    
+    return response
 
 
 @mcp.tool(

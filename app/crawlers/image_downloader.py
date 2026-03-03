@@ -39,16 +39,21 @@ class ImageDownloader:
         "toutiao": ["toutiao.com", "p3-sign.toutiaoimg.com", "p6-sign.toutiaoimg.com", "p9-sign.toutiaoimg.com"],
     }
     
-    def __init__(self, output_dir: str):
+    def __init__(self, output_dir: str, compress: bool = False, compress_quality: int = 85):
         """
         初始化图片下载器
         
         Args:
             output_dir: 输出目录
+            compress: 是否压缩图片
+            compress_quality: 压缩质量 (1-95)
         """
         self.output_dir = output_dir
         self.images_dir = os.path.join(output_dir, "images")
         os.makedirs(self.images_dir, exist_ok=True)
+        
+        self.compress = compress
+        self.compress_quality = compress_quality
         
         self.client = httpx.Client(
             timeout=30,
@@ -59,6 +64,9 @@ class ImageDownloader:
         
         # 图片计数器，用于生成唯一文件名
         self._image_counter = 0
+        
+        # 压缩统计
+        self._compress_stats = {"total_original": 0, "total_compressed": 0, "count": 0}
         
         # 用于今日头条图片的浏览器实例
         self._playwright = None
@@ -158,6 +166,48 @@ class ImageDownloader:
                 return ext
         
         return ".jpg"
+    
+    def _compress_image(self, filepath: str) -> bool:
+        """
+        压缩图片
+        
+        Args:
+            filepath: 图片文件路径
+        
+        Returns:
+            是否成功
+        """
+        from app.utils.image_compressor import ImageCompressor
+        
+        try:
+            compressor = ImageCompressor(quality=self.compress_quality)
+            success, original_size, compressed_size = compressor.compress_in_place(filepath)
+            
+            if success:
+                self._compress_stats["total_original"] += original_size
+                self._compress_stats["total_compressed"] += compressed_size
+                self._compress_stats["count"] += 1
+            
+            return success
+        except Exception as e:
+            print(f"压缩图片失败: {filepath} - {e}")
+            return False
+    
+    def get_compress_stats(self) -> dict:
+        """
+        获取压缩统计信息
+        
+        Returns:
+            压缩统计字典
+        """
+        stats = self._compress_stats.copy()
+        if stats["total_original"] > 0:
+            stats["saved_bytes"] = stats["total_original"] - stats["total_compressed"]
+            stats["saved_percent"] = (stats["saved_bytes"] / stats["total_original"]) * 100
+        else:
+            stats["saved_bytes"] = 0
+            stats["saved_percent"] = 0
+        return stats
     
     def _clean_url(self, url: str) -> str:
         """
@@ -309,6 +359,10 @@ class ImageDownloader:
             # 保存图片
             with open(filepath, "wb") as f:
                 f.write(content)
+            
+            # 压缩图片
+            if self.compress:
+                self._compress_image(filepath)
             
             # 相对路径：images/年/月/文件名
             relative_path = f"images/{year}/{month}/{filename}"

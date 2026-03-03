@@ -27,6 +27,8 @@ class ArticleCreateRequest(BaseModel):
     """文章创建请求模型"""
     url: str = Field(..., description="要提取并保存的网页 URL")
     download_images: bool = Field(default=False, description="是否下载图片到本地")
+    compress_images: bool = Field(default=False, description="是否压缩下载的图片")
+    compress_quality: int = Field(default=85, ge=1, le=95, description="图片压缩质量 (1-95)")
 
 
 class ArticleCreateResponse(BaseModel):
@@ -34,6 +36,7 @@ class ArticleCreateResponse(BaseModel):
     title: str = Field(..., description="文章标题")
     url: str = Field(..., description="原始 URL")
     filepath: str = Field(..., description="保存的文件路径")
+    compress_stats: dict = Field(default_factory=dict, description="图片压缩统计信息")
 
 
 @router.post("/articles", response_model=ArticleCreateResponse)
@@ -56,13 +59,15 @@ async def create_article(request: ArticleCreateRequest):
         )
         
         platform = detect_platform(request.url)
-        filepath = save_article(
+        filepath, compress_stats = save_article(
             title=result.title,
             url=result.url,
             markdown=result.markdown,
             html=result.html,
             image_urls=result.image_urls,
             download_images=request.download_images,
+            compress_images=request.compress_images,
+            compress_quality=request.compress_quality,
             platform=platform,
         )
         
@@ -70,6 +75,7 @@ async def create_article(request: ArticleCreateRequest):
             "title": result.title,
             "url": result.url,
             "filepath": filepath,
+            "compress_stats": compress_stats,
         }
     
     except asyncio.TimeoutError:
@@ -102,8 +108,10 @@ def save_article(
     html: str = "",
     image_urls: list[str] = None,
     download_images: bool = False,
+    compress_images: bool = False,
+    compress_quality: int = 85,
     platform: str = "generic",
-) -> str:
+) -> tuple[str, dict]:
     """
     保存文章为 Markdown 文件
     
@@ -114,10 +122,12 @@ def save_article(
         html: HTML 内容
         image_urls: 图片 URL 列表
         download_images: 是否下载图片
+        compress_images: 是否压缩图片
+        compress_quality: 压缩质量
         platform: 平台名称
     
     Returns:
-        保存的文件路径
+        (保存的文件路径, 压缩统计信息)
     """
     output_dir = settings.output_dir
     os.makedirs(output_dir, exist_ok=True)
@@ -129,19 +139,26 @@ def save_article(
     
     print(f"保存文章: {title}")
     print(f"下载图片: {download_images}")
+    print(f"压缩图片: {compress_images}")
     print(f"HTML 长度: {len(html) if html else 0}")
     print(f"图片 URL 数量: {len(image_urls) if image_urls else 0}")
     print(f"平台: {platform}")
+    
+    compress_stats = {}
     
     if download_images:
         article_dir = os.path.dirname(filepath)
         
         if html:
             print("使用 html_to_markdown_with_images")
-            markdown = html_to_markdown_with_images(html, image_urls or [], article_dir, platform)
+            markdown, compress_stats = html_to_markdown_with_images(
+                html, image_urls or [], article_dir, platform, compress_images, compress_quality
+            )
         elif image_urls:
             print("使用 download_images_in_markdown")
-            markdown = download_images_in_markdown(markdown, image_urls, article_dir)
+            markdown, compress_stats = download_images_in_markdown(
+                markdown, image_urls, article_dir, compress_images, compress_quality
+            )
         else:
             print("没有 HTML 和图片 URL，跳过下载")
     else:
@@ -163,7 +180,7 @@ def save_article(
         f.write(full_document)
     
     print(f"文章保存到: {filepath}")
-    return filepath
+    return filepath, compress_stats
 
 
 def html_to_markdown_with_images(
@@ -171,10 +188,25 @@ def html_to_markdown_with_images(
     image_urls: list[str],
     output_dir: str,
     platform: str = "generic",
-) -> str:
-    """将 HTML 转换为 Markdown 并下载图片"""
+    compress: bool = False,
+    compress_quality: int = 85,
+) -> tuple[str, dict]:
+    """
+    将 HTML 转换为 Markdown 并下载图片
+    
+    Args:
+        html: HTML 内容
+        image_urls: 图片 URL 列表
+        output_dir: 输出目录
+        platform: 平台名称
+        compress: 是否压缩图片
+        compress_quality: 压缩质量
+    
+    Returns:
+        (Markdown 内容, 压缩统计信息)
+    """
     if not html:
-        return ""
+        return "", {}
     
     # 先转换为 Markdown
     markdown = MarkdownConverter.convert_html_to_markdown(html, platform=platform)
@@ -182,27 +214,45 @@ def html_to_markdown_with_images(
     # 对于今日头条，直接返回原始 Markdown，保留原始图片 URL
     if platform == "toutiao":
         print("对于今日头条，保留原始图片 URL")
-        return markdown
+        return markdown, {}
     
     # 对于其他平台，尝试下载图片
-    with ImageDownloader(output_dir) as downloader:
+    with ImageDownloader(output_dir, compress=compress, compress_quality=compress_quality) as downloader:
         print("使用 ImageExtractor.replace_urls_with_downloader 下载图片")
         markdown = ImageExtractor.replace_urls_with_downloader(markdown, downloader)
+        compress_stats = downloader.get_compress_stats() if compress else {}
     
-    return markdown
+    return markdown, compress_stats
 
 
 def download_images_in_markdown(
     markdown: str,
     image_urls: list[str],
     output_dir: str,
-) -> str:
-    """下载 Markdown 中的图片"""
-    if not markdown:
-        return markdown
+    compress: bool = False,
+    compress_quality: int = 85,
+) -> tuple[str, dict]:
+    """
+    下载 Markdown 中的图片
     
-    with ImageDownloader(output_dir) as downloader:
-        return ImageExtractor.replace_urls_with_downloader(markdown, downloader)
+    Args:
+        markdown: Markdown 内容
+        image_urls: 图片 URL 列表
+        output_dir: 输出目录
+        compress: 是否压缩图片
+        compress_quality: 压缩质量
+    
+    Returns:
+        (Markdown 内容, 压缩统计信息)
+    """
+    if not markdown:
+        return markdown, {}
+    
+    with ImageDownloader(output_dir, compress=compress, compress_quality=compress_quality) as downloader:
+        markdown = ImageExtractor.replace_urls_with_downloader(markdown, downloader)
+        compress_stats = downloader.get_compress_stats() if compress else {}
+    
+    return markdown, compress_stats
 
 
 def format_markdown_content(markdown: str) -> str:

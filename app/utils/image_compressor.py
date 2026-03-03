@@ -12,10 +12,10 @@ class ImageCompressor:
     """
     图片压缩器
     
-    支持 JPEG、PNG、WebP 格式的图片压缩
+    支持 JPEG、PNG、WebP、GIF 格式的图片压缩
     """
     
-    SUPPORTED_FORMATS = {'.jpg', '.jpeg', '.png', '.webp'}
+    SUPPORTED_FORMATS = {'.jpg', '.jpeg', '.png', '.webp', '.gif'}
     
     def __init__(self, quality: int = 85):
         """
@@ -47,12 +47,11 @@ class ImageCompressor:
             (是否成功, 原始大小, 压缩后大小)
         """
         if not self._pillow_available:
-            print("Pillow 未安装，跳过压缩")
             return False, 0, 0
         
         ext = os.path.splitext(input_path)[1].lower()
+        
         if ext not in self.SUPPORTED_FORMATS:
-            print(f"不支持的图片格式: {ext}")
             return False, 0, 0
         
         if output_path is None:
@@ -76,6 +75,16 @@ class ImageCompressor:
                     if img.mode in ("RGBA", "P"):
                         img = img.convert("RGB")
                     img.save(output_path, "WEBP", optimize=True, quality=self.quality)
+                elif ext == '.gif':
+                    # 检查是否为动画 GIF
+                    is_animated = getattr(img, "is_animated", False)
+                    if is_animated:
+                        # 动画 GIF 暂不压缩，保持原样
+                        print(f"跳过动画 GIF: {os.path.basename(input_path)}")
+                        return False, original_size, original_size
+                    else:
+                        # 静态 GIF，优化保存
+                        img.save(output_path, "GIF", optimize=True)
             
             compressed_size = os.path.getsize(output_path)
             saved_bytes = original_size - compressed_size

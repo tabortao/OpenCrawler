@@ -140,6 +140,7 @@ def save_article(
     print(f"保存文章: {title}")
     print(f"下载图片: {download_images}")
     print(f"压缩图片: {compress_images}")
+    print(f"压缩质量: {compress_quality}")
     print(f"HTML 长度: {len(html) if html else 0}")
     print(f"图片 URL 数量: {len(image_urls) if image_urls else 0}")
     print(f"平台: {platform}")

@@ -308,6 +308,7 @@ class ImageDownloader:
         Returns:
             本地相对路径，失败返回 None
         """
+        
         if url in self.downloaded:
             return self.downloaded[url]
         

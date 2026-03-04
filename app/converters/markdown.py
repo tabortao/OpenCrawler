@@ -98,6 +98,125 @@ class MarkdownConverter(BaseConverter):
             MarkdownConverter._process_sspai_content(soup)
         elif platform == "toutiao":
             MarkdownConverter._process_toutiao_content(soup)
+        elif platform == "generic":
+            MarkdownConverter._process_generic_content(soup)
+    
+    @staticmethod
+    def _process_generic_content(soup: BeautifulSoup) -> None:
+        """处理通用网站内容"""
+        img_data_attrs = [
+            "data-original", "data-src", "data-lazy-src", "data-lazy",
+            "data-url", "data-actualsrc", "data-image", "data-cover",
+        ]
+        
+        imgs = list(soup.find_all("img"))
+        
+        for img in imgs:
+            selected_src = None
+            
+            for attr in img_data_attrs:
+                url = img.get(attr, "")
+                if url and not url.startswith("data:") and url != "..." and len(url) > 10:
+                    selected_src = url
+                    break
+            
+            if not selected_src:
+                srcset = img.get("srcset", "")
+                if srcset:
+                    parts = srcset.split(",")
+                    if parts:
+                        first_part = parts[0].strip().split()
+                        if first_part:
+                            selected_src = first_part[0]
+            
+            if not selected_src:
+                src = img.get("src", "")
+                if src and not src.startswith("data:") and src != "..." and len(src) > 10:
+                    selected_src = src
+            
+            if not selected_src:
+                img.decompose()
+                continue
+            
+            if selected_src.startswith("//"):
+                selected_src = "https:" + selected_src
+            
+            if "toutiao" not in selected_src.lower():
+                if "?" in selected_src:
+                    selected_src = selected_src.split("?")[0]
+            
+            img["src"] = selected_src
+            
+            for attr in list(img.attrs.keys()):
+                if attr not in ["src", "alt", "title"]:
+                    del img[attr]
+        
+        for tag in soup.find_all(["script", "style", "noscript"]):
+            tag.decompose()
+        
+        remove_patterns = [
+            r'\b(ad|advertisement|ads|adv|sponsor|promo)\b',
+            r'\b(social|share|sharing|facebook|twitter|weibo|wechat)\b',
+            r'\b(comment|comments|reply|replies)\b',
+            r'\b(related|recommend|recommended|popular|trending)\b',
+            r'\b(sidebar|widget|footer|header|nav|navigation|menu)\b',
+            r'\b(newsletter|subscribe|subscription|rss)\b',
+            r'\b(cookie|gdpr|privacy|consent)\b',
+            r'\b(popup|modal|overlay|banner)\b',
+        ]
+        
+        for pattern in remove_patterns:
+            for tag in soup.find_all(class_=re.compile(pattern, re.I)):
+                tag.decompose()
+            for tag in soup.find_all(id=re.compile(pattern, re.I)):
+                tag.decompose()
+        
+        for tag in soup.find_all(["nav", "aside", "footer"]):
+            tag.decompose()
+        
+        for tag in soup.find_all(attrs={"aria-hidden": "true"}):
+            if not tag.find_all(["img", "video", "audio"]):
+                tag.decompose()
+        
+        for tag in soup.find_all(style=re.compile(r'display:\s*none|visibility:\s*hidden', re.I)):
+            tag.decompose()
+        
+        for br in soup.find_all("br"):
+            br.replace_with("\n")
+        
+        for hr in soup.find_all("hr"):
+            hr.replace_with("\n\n---\n\n")
+        
+        MarkdownConverter._convert_style_headings(soup)
+    
+    @staticmethod
+    def _convert_style_headings(soup: BeautifulSoup) -> None:
+        """将样式标题转换为标准 HTML 标题"""
+        spans = list(soup.find_all("span"))
+        
+        for span in spans:
+            style = span.get("style", "")
+            text = span.get_text(strip=True)
+            
+            if not text or len(text) < 2 or len(text) > 100:
+                continue
+            
+            if "font-weight" in style and "bold" in style.lower():
+                font_size_match = re.search(r'font-size:\s*(\d+)px', style)
+                font_size = int(font_size_match.group(1)) if font_size_match else 0
+                
+                if font_size >= 18:
+                    h2_tag = soup.new_tag("h2")
+                    h2_tag.string = text
+                    span.replace_with(h2_tag)
+                elif font_size >= 16:
+                    h3_tag = soup.new_tag("h3")
+                    h3_tag.string = text
+                    span.replace_with(h3_tag)
+                elif font_size >= 14:
+                    h4_tag = soup.new_tag("h4")
+                    h4_tag.string = text
+                    span.replace_with(h4_tag)
     
     @staticmethod
     def _process_wechat_content(soup: BeautifulSoup) -> None:
@@ -399,7 +518,9 @@ class MarkdownConverter(BaseConverter):
             return MarkdownConverter._convert_table_to_markdown(element)
         
         elif tag_name in ["div", "section", "article", "main"]:
-            return children_text
+            if children_text.strip():
+                return f"\n{children_text}\n"
+            return ""
         
         elif tag_name == "span":
             return children_text

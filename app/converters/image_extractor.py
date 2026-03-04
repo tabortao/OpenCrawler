@@ -1,12 +1,13 @@
 """
 图片提取器模块
 
-从 HTML 内容中提取图片 URL
+从 HTML 内容中提取图片 URL，支持多种懒加载格式
 """
 
 import html
 import re
-from typing import Optional
+from typing import Optional, List, Tuple
+from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup
 
@@ -15,16 +16,44 @@ class ImageExtractor:
     """
     图片提取器
     
-    从 HTML 内容中提取图片 URL
+    从 HTML 内容中提取图片 URL，支持多种懒加载格式
     """
     
+    SMALL_IMAGE_PATTERNS = [
+        "avatar", "thumbnail", "icon", "logo", "button",
+        "badge", "flag", "emoji", "smiley", "emoticon",
+        "!32x32", "!72x72", "!84x84", "!100x100",
+        "/avatar/", "/icons/", "/logo/", "/thumb/",
+        "/thumbnails/", "/favicon", "/sprite",
+        "placeholder", "loading.gif", "spinner",
+        "1x1", "blank.gif", "transparent",
+        "data:image", "base64",
+    ]
+    
+    IMAGE_DATA_ATTRIBUTES = [
+        "data-original",
+        "data-src",
+        "data-lazy-src",
+        "data-lazy",
+        "data-url",
+        "data-actualsrc",
+        "data-srcset",
+        "data-lazy-srcset",
+        "data-image",
+        "data-img",
+        "data-cover",
+        "data-background",
+        "data-bg",
+    ]
+    
     @staticmethod
-    def extract_from_html(html_content: str) -> list[str]:
+    def extract_from_html(html_content: str, base_url: str = "") -> list[str]:
         """
         从 HTML 内容中提取所有图片 URL
         
         Args:
             html_content: HTML 内容
+            base_url: 基础 URL，用于解析相对路径
         
         Returns:
             图片 URL 列表
@@ -36,34 +65,141 @@ class ImageExtractor:
         image_urls = []
         
         for img in soup.find_all("img"):
-            data_original = img.get("data-original", "")
-            data_src = img.get("data-src", "")
-            src = img.get("src", "")
-            
-            if data_original and not data_original.startswith("data:"):
-                src = data_original
-            elif data_src and not data_src.startswith("data:"):
-                src = data_src
-            
-            if not src or src.startswith("data:"):
-                continue
-            
-            if src == "..." or len(src) < 10:
-                continue
-            
-            src = html.unescape(src)
-            if src.startswith("//"):
-                src = "https:" + src
-            
-            # 对于今日头条图片，保留完整的 URL（包含查询参数）
-            if "toutiao" not in src.lower():
-                if "?" in src:
-                    src = src.split("?")[0]
-            
-            if src not in image_urls:
-                image_urls.append(src)
+            url = ImageExtractor._extract_image_url(img, base_url)
+            if url and url not in image_urls:
+                image_urls.append(url)
+        
+        for source in soup.find_all("source"):
+            srcset = source.get("srcset", "")
+            if srcset:
+                urls = ImageExtractor._parse_srcset(srcset, base_url)
+                for url in urls:
+                    if url and url not in image_urls:
+                        image_urls.append(url)
+        
+        for element in soup.find_all(attrs={"style": True}):
+            style = element.get("style", "")
+            bg_urls = ImageExtractor._extract_background_images(style, base_url)
+            for url in bg_urls:
+                if url and url not in image_urls:
+                    image_urls.append(url)
         
         return image_urls
+    
+    @staticmethod
+    def _extract_image_url(img, base_url: str = "") -> Optional[str]:
+        """
+        从 img 元素提取图片 URL
+        
+        Args:
+            img: BeautifulSoup img 元素
+            base_url: 基础 URL
+        
+        Returns:
+            图片 URL 或 None
+        """
+        url_candidates = []
+        
+        for attr in ImageExtractor.IMAGE_DATA_ATTRIBUTES:
+            url = img.get(attr, "")
+            if url and not url.startswith("data:"):
+                url_candidates.append(url)
+        
+        srcset = img.get("srcset", "")
+        if srcset:
+            urls = ImageExtractor._parse_srcset(srcset, base_url)
+            url_candidates.extend(urls)
+        
+        src = img.get("src", "")
+        if src and not src.startswith("data:"):
+            url_candidates.append(src)
+        
+        for url in url_candidates:
+            if not url or len(url) < 10:
+                continue
+            
+            url_lower = url.lower()
+            if any(pattern.lower() in url_lower for pattern in ImageExtractor.SMALL_IMAGE_PATTERNS):
+                continue
+            
+            url = html.unescape(url)
+            
+            if url.startswith("//"):
+                url = "https:" + url
+            elif base_url and not url.startswith(("http://", "https://")):
+                url = urljoin(base_url, url)
+            
+            if "toutiao" not in url.lower():
+                if "?" in url:
+                    url = url.split("?")[0]
+            
+            if ImageExtractor._is_valid_image_url(url):
+                return url
+        
+        return None
+    
+    @staticmethod
+    def _parse_srcset(srcset: str, base_url: str = "") -> List[str]:
+        """
+        解析 srcset 属性
+        
+        Args:
+            srcset: srcset 属性值
+            base_url: 基础 URL
+        
+        Returns:
+            URL 列表
+        """
+        urls = []
+        
+        parts = srcset.split(",")
+        for part in parts:
+            part = part.strip()
+            if not part:
+                continue
+            
+            url_parts = part.split()
+            if url_parts:
+                url = url_parts[0]
+                if url and not url.startswith("data:"):
+                    if url.startswith("//"):
+                        url = "https:" + url
+                    elif base_url and not url.startswith(("http://", "https://")):
+                        url = urljoin(base_url, url)
+                    urls.append(url)
+        
+        return urls
+    
+    @staticmethod
+    def _extract_background_images(style: str, base_url: str = "") -> List[str]:
+        """
+        从 CSS 样式中提取背景图片 URL
+        
+        Args:
+            style: CSS 样式字符串
+            base_url: 基础 URL
+        
+        Returns:
+            URL 列表
+        """
+        urls = []
+        
+        patterns = [
+            r'url\(["\']?([^"\')\s]+)["\']?\)',
+            r'background-image:\s*url\(["\']?([^"\')\s]+)["\']?\)',
+        ]
+        
+        for pattern in patterns:
+            matches = re.findall(pattern, style, re.IGNORECASE)
+            for url in matches:
+                if url and not url.startswith("data:"):
+                    if url.startswith("//"):
+                        url = "https:" + url
+                    elif base_url and not url.startswith(("http://", "https://")):
+                        url = urljoin(base_url, url)
+                    urls.append(url)
+        
+        return urls
     
     @staticmethod
     def extract_from_markdown(markdown: str) -> list[str]:
@@ -138,8 +274,6 @@ class ImageExtractor:
         if not allowed_domains:
             return image_urls
         
-        from urllib.parse import urlparse
-        
         filtered = []
         for url in image_urls:
             try:
@@ -162,13 +296,33 @@ class ImageExtractor:
         Returns:
             是否有效
         """
+        return ImageExtractor._is_valid_image_url(url)
+    
+    @staticmethod
+    def _is_valid_image_url(url: str) -> bool:
+        """
+        内部方法：检查是否为有效的图片 URL
+        
+        Args:
+            url: 图片 URL
+        
+        Returns:
+            是否有效
+        """
         if not url or url.startswith("data:"):
             return False
         
         if len(url) < 10:
             return False
         
-        image_extensions = [".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".bmp"]
+        try:
+            parsed = urlparse(url)
+            if not parsed.scheme or not parsed.netloc:
+                return False
+        except Exception:
+            return False
+        
+        image_extensions = [".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".bmp", ".avif"]
         url_lower = url.lower()
         
         if any(ext in url_lower for ext in image_extensions):
@@ -208,7 +362,61 @@ class ImageExtractor:
             
             if local_path:
                 return f"![{alt_text}]({local_path})"
-            # 下载失败时保留原始 URL
             return match.group(0)
         
         return re.sub(pattern, replace_image_url, markdown)
+    
+    @staticmethod
+    def get_image_dimensions(url: str) -> Optional[Tuple[int, int]]:
+        """
+        获取图片尺寸（需要下载图片）
+        
+        Args:
+            url: 图片 URL
+        
+        Returns:
+            (宽度, 高度) 元组或 None
+        """
+        try:
+            import httpx
+            from PIL import Image
+            import io
+            
+            response = httpx.get(url, follow_redirects=True, timeout=10)
+            if response.status_code == 200:
+                img = Image.open(io.BytesIO(response.content))
+                return img.size
+        except Exception:
+            pass
+        
+        return None
+    
+    @staticmethod
+    def filter_small_images(
+        image_urls: list[str],
+        min_width: int = 100,
+        min_height: int = 100,
+    ) -> list[str]:
+        """
+        过滤小尺寸图片
+        
+        Args:
+            image_urls: 图片 URL 列表
+            min_width: 最小宽度
+            min_height: 最小高度
+        
+        Returns:
+            过滤后的图片 URL 列表
+        """
+        filtered = []
+        
+        for url in image_urls:
+            dimensions = ImageExtractor.get_image_dimensions(url)
+            if dimensions:
+                width, height = dimensions
+                if width >= min_width and height >= min_height:
+                    filtered.append(url)
+            else:
+                filtered.append(url)
+        
+        return filtered

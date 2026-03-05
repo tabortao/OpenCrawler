@@ -103,30 +103,37 @@ micromamba run -p ./venv python main.py
 ### 使用示例
 
 ```bash
-# 健康检查
+# 健康检查（不需要认证）
 curl http://127.0.0.1:8000/api/v1/health
 
+# 如果配置了 API_TOKEN，需要在请求头中携带令牌
+# 以下示例假设已配置令牌，请将 YOUR_TOKEN 替换为实际令牌
+
 # 获取网页标题
-curl "http://127.0.0.1:8000/api/v1/pages/title?url=https://sspai.com/post/105218"
+curl -H "Authorization: Bearer YOUR_TOKEN" "http://127.0.0.1:8000/api/v1/pages/title?url=https://sspai.com/post/105218"
 
 # 提取页面内容
 curl -X POST http://127.0.0.1:8000/api/v1/pages/extract \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_TOKEN" \
   -d '{"url": "https://sspai.com/post/12345"}'
 
 # 创建文章（不下载图片）
 curl -X POST http://127.0.0.1:8000/api/v1/articles \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_TOKEN" \
   -d '{"url": "https://zhuanlan.zhihu.com/p/123456789"}'
 
 # 创建文章并下载图片
 curl -X POST http://127.0.0.1:8000/api/v1/articles \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_TOKEN" \
   -d '{"url": "https://mp.weixin.qq.com/s/xxx", "download_images": true}'
 
 # 创建今日头条文章（保留原始图片 URL）
 curl -X POST http://127.0.0.1:8000/api/v1/articles \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_TOKEN" \
   -d '{"url": "https://www.toutiao.com/article/7611076105369371163", "download_images": true}'
 ```
 
@@ -155,7 +162,39 @@ XHS_COOKIE=
 
 # 浏览器配置
 BROWSER_HEADLESS=
+
+# API 认证令牌（可选，不设置则不需要认证）
+API_TOKEN=
 ```
+
+### API 认证
+
+如果配置了 `API_TOKEN`，所有 API 请求都需要携带认证令牌。
+
+#### 生成令牌
+
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(32))"
+```
+
+#### 使用令牌
+
+支持两种认证方式：
+
+```bash
+# 方式1: Bearer Token（推荐）
+curl -H "Authorization: Bearer YOUR_TOKEN" http://127.0.0.1:8000/api/v1/pages/extract
+
+# 方式2: X-API-Token
+curl -H "X-API-Token: YOUR_TOKEN" http://127.0.0.1:8000/api/v1/pages/extract
+```
+
+#### 安全建议
+
+1. 使用至少 32 字节的随机字符串
+2. 定期轮换令牌（建议每 90 天）
+3. 确保 `.env` 文件不在版本控制中
+4. 设置适当的文件权限（Linux/Mac: `chmod 600 .env`）
 
 ### Cookie 获取方法
 

@@ -8,11 +8,12 @@ import asyncio
 import os
 from datetime import datetime
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
 from app.core.config import settings
 from app.core.exceptions import CrawlerException, URLValidationError, TimeoutError
+from app.core.auth import optional_auth
 from app.crawlers.factory import CrawlerFactory
 from app.crawlers.image_downloader import ImageDownloader
 from app.utils.url import is_valid_url, detect_platform
@@ -40,7 +41,10 @@ class ArticleCreateResponse(BaseModel):
 
 
 @router.post("/articles", response_model=ArticleCreateResponse)
-async def create_article(request: ArticleCreateRequest):
+async def create_article(
+    request: ArticleCreateRequest,
+    _auth: bool = Depends(optional_auth),
+):
     """
     创建文章
     
@@ -209,15 +213,12 @@ def html_to_markdown_with_images(
     if not html:
         return "", {}
     
-    # 先转换为 Markdown
     markdown = MarkdownConverter.convert_html_to_markdown(html, platform=platform)
     
-    # 对于今日头条，直接返回原始 Markdown，保留原始图片 URL
     if platform == "toutiao":
         print("对于今日头条，保留原始图片 URL")
         return markdown, {}
     
-    # 对于其他平台，尝试下载图片
     with ImageDownloader(output_dir, compress=compress, compress_quality=compress_quality) as downloader:
         print("使用 ImageExtractor.replace_urls_with_downloader 下载图片")
         markdown = ImageExtractor.replace_urls_with_downloader(markdown, downloader)

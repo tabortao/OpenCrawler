@@ -90,7 +90,41 @@ PROXY_URL=
 ZHIHU_COOKIE=
 XHS_COOKIE=
 BROWSER_HEADLESS=
+API_TOKEN=           # API 认证令牌（可选，不设置则不需要认证）
 ```
+
+## API 认证
+
+### 认证方式
+
+如果配置了 `API_TOKEN` 环境变量，所有 API 请求都需要携带认证令牌。支持两种认证方式：
+
+#### 1. Bearer Token 方式（推荐）
+```bash
+curl -H "Authorization: Bearer <your-token>" http://127.0.0.1:8000/api/v1/pages/extract
+```
+
+#### 2. X-API-Token 方式
+```bash
+curl -H "X-API-Token: <your-token>" http://127.0.0.1:8000/api/v1/pages/extract
+```
+
+### 生成令牌
+
+使用以下命令生成高强度随机令牌：
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(32))"
+```
+
+### 安全建议
+
+1. **令牌强度**: 使用至少 32 字节的随机字符串
+2. **文件权限**: 确保 `.env` 文件权限为仅所有者可读写
+   - Windows: 右键 -> 属性 -> 安全 -> 高级 -> 禁用继承 -> 仅保留当前用户
+   - Linux/Mac: `chmod 600 .env`
+3. **定期轮换**: 建议每 90 天更换一次令牌
+4. **不要提交**: 确保 `.env` 文件在 `.gitignore` 中
+5. **不要记录**: 令牌不会出现在日志或错误信息中
 
 ## 开发设置
 
@@ -127,25 +161,35 @@ micromamba run -p ./venv python main_new.py
 ## 测试 API
 
 ```bash
-# 健康检查
+# 健康检查（不需要认证）
 curl http://127.0.0.1:8000/api/v1/health
 
+# 如果配置了 API_TOKEN，需要在请求头中携带令牌
+# 方式1: Bearer Token
+curl -H "Authorization: Bearer YOUR_TOKEN" "http://127.0.0.1:8000/api/v1/pages/title?url=https://example.com"
+
+# 方式2: X-API-Token
+curl -H "X-API-Token: YOUR_TOKEN" "http://127.0.0.1:8000/api/v1/pages/title?url=https://example.com"
+
 # 获取网页标题
-curl "http://127.0.0.1:8000/api/v1/pages/title?url=https://example.com"
+curl -H "Authorization: Bearer YOUR_TOKEN" "http://127.0.0.1:8000/api/v1/pages/title?url=https://example.com"
 
 # 提取页面内容
 curl -X POST http://127.0.0.1:8000/api/v1/pages/extract \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_TOKEN" \
   -d '{"url": "https://example.com"}'
 
 # 创建文章（不下载图片）
 curl -X POST http://127.0.0.1:8000/api/v1/articles \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_TOKEN" \
   -d '{"url": "https://zhuanlan.zhihu.com/p/123456789"}'
 
 # 创建文章并下载图片
 curl -X POST http://127.0.0.1:8000/api/v1/articles \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_TOKEN" \
   -d '{"url": "https://mp.weixin.qq.com/s/xxx", "download_images": true}'
 ```
 

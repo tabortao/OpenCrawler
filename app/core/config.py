@@ -35,6 +35,8 @@ class Settings:
     zhihu_cookie: str = ""
     xhs_cookie: str = ""
     
+    api_token: str = ""
+    
     browser_headless: bool = True
     browser_timeout: int = 45000
     browser_navigation_timeout: int = 60000
@@ -50,6 +52,7 @@ class Settings:
         self.proxy_url = os.getenv("PROXY_URL", self.proxy_url)
         self.zhihu_cookie = os.getenv("ZHIHU_COOKIE", self.zhihu_cookie)
         self.xhs_cookie = os.getenv("XHS_COOKIE", self.xhs_cookie)
+        self.api_token = os.getenv("API_TOKEN", self.api_token)
         
         if os.getenv("BROWSER_HEADLESS"):
             self.browser_headless = os.getenv("BROWSER_HEADLESS", "true").lower() == "true"

@@ -6,11 +6,12 @@
 
 import asyncio
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Depends
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from app.core.exceptions import CrawlerException, URLValidationError, TimeoutError
+from app.core.auth import optional_auth
 from app.plugins.registry import plugin_registry
 from app.crawlers.factory import CrawlerFactory
 from app.utils.url import is_valid_url, detect_platform
@@ -45,7 +46,10 @@ class ErrorResponse(BaseModel):
 
 
 @router.get("/pages/title", response_model=PageTitleResponse)
-async def get_page_title(url: str = Query(..., description="要获取标题的网页 URL")):
+async def get_page_title(
+    url: str = Query(..., description="要获取标题的网页 URL"),
+    _auth: bool = Depends(optional_auth),
+):
     """
     获取网页标题
     
@@ -101,7 +105,10 @@ async def get_page_title(url: str = Query(..., description="要获取标题的�
 
 
 @router.post("/pages/extract", response_model=PageExtractResponse)
-async def extract_page(request: PageExtractRequest):
+async def extract_page(
+    request: PageExtractRequest,
+    _auth: bool = Depends(optional_auth),
+):
     """
     提取页面内容
     

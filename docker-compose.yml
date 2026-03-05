@@ -1,0 +1,52 @@
+version: '3.8'
+
+services:
+  # API 服务 - 提供 REST API
+  opencrawler-api:
+    image: ghcr.io/tabortao/opencrawler:latest
+    container_name: opencrawler-api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8000
+      - API_TOKEN=${API_TOKEN:-}
+      - BROWSER_HEADLESS=true
+      - ZHIHU_COOKIE=${ZHIHU_COOKIE:-}
+      - XHS_COOKIE=${XHS_COOKIE:-}
+      - PROXY_URL=${PROXY_URL:-}
+    volumes:
+      - ./output:/app/output
+      - ./data:/app/data
+      - browser_data:/app/browser_data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    command: ["python", "main.py"]
+
+  # MCP 服务 - 提供 MCP Server（可选）
+  opencrawler-mcp:
+    image: ghcr.io/tabortao/opencrawler:latest
+    container_name: opencrawler-mcp
+    restart: unless-stopped
+    ports:
+      - "8765:8765"
+    environment:
+      - BROWSER_HEADLESS=true
+      - ZHIHU_COOKIE=${ZHIHU_COOKIE:-}
+      - XHS_COOKIE=${XHS_COOKIE:-}
+      - PROXY_URL=${PROXY_URL:-}
+    volumes:
+      - ./output:/app/output
+      - ./data:/app/data
+      - browser_data:/app/browser_data
+    command: ["python", "mcp_server.py", "http", "--host", "0.0.0.0", "--port", "8765"]
+    profiles:
+      - mcp
+
+volumes:
+  browser_data:

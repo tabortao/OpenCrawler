@@ -113,27 +113,27 @@ curl http://127.0.0.1:8000/api/v1/health
 curl -H "Authorization: Bearer YOUR_TOKEN" "http://127.0.0.1:8000/api/v1/pages/title?url=https://sspai.com/post/105218"
 
 # 提取页面内容
-curl -X POST http://127.0.0.1:8000/api/v1/pages/extract \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer YOUR_TOKEN" \
+curl -X POST http://127.0.0.1:8000/api/v1/pages/extract `
+  -H "Content-Type: application/json" `
+  -H "Authorization: Bearer YOUR_TOKEN" `
   -d '{"url": "https://sspai.com/post/12345"}'
 
 # 创建文章（不下载图片）
-curl -X POST http://127.0.0.1:8000/api/v1/articles \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer YOUR_TOKEN" \
+curl -X POST http://127.0.0.1:8000/api/v1/articles `
+  -H "Content-Type: application/json" `
+  -H "Authorization: Bearer YOUR_TOKEN" `
   -d '{"url": "https://zhuanlan.zhihu.com/p/123456789"}'
 
 # 创建文章并下载图片
-curl -X POST http://127.0.0.1:8000/api/v1/articles \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer YOUR_TOKEN" \
+curl -X POST http://127.0.0.1:8000/api/v1/articles `
+  -H "Content-Type: application/json" `
+  -H "Authorization: Bearer YOUR_TOKEN" `
   -d '{"url": "https://mp.weixin.qq.com/s/xxx", "download_images": true}'
 
 # 创建今日头条文章（保留原始图片 URL）
-curl -X POST http://127.0.0.1:8000/api/v1/articles \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer YOUR_TOKEN" \
+curl -X POST http://127.0.0.1:8000/api/v1/articles `
+  -H "Content-Type: application/json" `
+  -H "Authorization: Bearer YOUR_TOKEN" `
   -d '{"url": "https://www.toutiao.com/article/7611076105369371163", "download_images": true}'
 ```
 

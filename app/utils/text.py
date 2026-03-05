@@ -128,13 +128,28 @@ def _clean_title(title: str) -> str:
     title = re.sub(r'\s+', ' ', title)
     title = title.strip()
     
+    # 只移除特定的网站后缀，不要使用太宽泛的规则
     suffixes_to_remove = [
         r'\s*[-_|]\s*微信公众平台\s*$',
+        r'\s*[-_|]\s*微信\s*$',
         r'\s*[-_|]\s*知乎\s*$',
         r'\s*[-_|]\s*少数派\s*$',
         r'\s*[-_|]\s*GitHub\s*$',
         r'\s*[-_|]\s*小红书\s*$',
-        r'\s*[-_|]\s*[^-_|]+\s*$',  # 移除最后的网站名后缀
+        r'\s*[-_|]\s*CSDN\s*$',
+        r'\s*[-_|]\s*掘金\s*$',
+        r'\s*[-_|]\s*简书\s*$',
+        r'\s*[-_|]\s*博客园\s*$',
+        r'\s*[-_|]\s*思否\s*$',
+        r'\s*[-_|]\s*SegmentFault\s*$',
+        r'\s*[-_|]\s*今日头条\s*$',
+        r'\s*[-_|]\s*搜狐\s*$',
+        r'\s*[-_|]\s*网易\s*$',
+        r'\s*[-_|]\s*新浪\s*$',
+        r'\s*[-_|]\s*腾讯\s*$',
+        r'\s*[-_|]\s*百度\s*$',
+        r'\s*_\s*微信公众号\s*$',
+        r'\s*\|\s*微信公众号\s*$',
     ]
     
     for suffix in suffixes_to_remove:

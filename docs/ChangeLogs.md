@@ -16,6 +16,10 @@
   - 提供 docker-compose.yml 快速部署
   - GitHub Action 自动构建和推送镜像到 Docker Hub 和 GHCR
   - 支持飞牛 NAS 部署
+  - 内置 MCP Server 支持
+- 新增技术文档：
+  - `docs/URL使用方法.md` - 完整的 API 接口文档
+  - `docs/Docker使用方法.md` - Docker 部署和使用指南
 
 ### v2.0.5 / 2026-03-04
 - 通用插件全面优化增强，达到与微信公众号、少数派插件同等水平的文章爬取效果：
